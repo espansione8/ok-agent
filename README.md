@@ -261,4 +261,4 @@ LICENSE             # MIT
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Adapt freely; if you build a stack profile or an enforcement hook, PRs welcome.
+MIT — see [LICENSE](LICENSE). Adapt freely.
