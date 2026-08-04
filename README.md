@@ -1,4 +1,5 @@
-# ok-agent — Workflow Guardrails & Context Memory for AI Coding Assistants
+# ok-agent 
+Workflow Guardrails & Context Memory for AI Coding Assistants
 
 > Two drop-in skills that make AI coding agents **plan before they write, remember what they
 > learn, and leave an auditable trail**:
