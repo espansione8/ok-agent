@@ -11,7 +11,7 @@ category: svelte
 > Before writing or modifying ANY Svelte code, you MUST:
 > 1. Read this ENTIRE file top to bottom. Every plan item must already reflect these conventions.
 > 2. Produce a structured **ARCHITECTURE PLAN** (§1) whose atomic tasks each cite the specific convention(s) they must follow.
-> 3. Write that task list to `.plan/todo.md` (§4 format, every item `- [ ]`) DURING planning — before approval. This is the ONLY file-write permitted before "ok proceed".
+> 3. Write that task list to `.plan/todo.md` (§4 format, every item `- [ ]`) DURING planning — before approval. This is the ONLY file-write permitted before "ok proceed". ONE REQUEST = ONE LIST, always: even a large multi-phase plan is a single list (phases become task ranges T-<n>.1…T-<n>.k, never separate T-<n> lists). If a pending (not yet approved) list for the current request already exists, UPDATE IT IN PLACE — same `T-<n>` ID, same header line; add/remove/reword its `- [ ]` items as feedback dictates. NEVER append a second list or take a new `T-<n>` for a plan revision.
 > 4. Present the plan as your ENTIRE response. Nothing else.
 > 5. **STOP. End your turn.** Approval is a mechanical check on the user's next message: it grants permission ONLY if that message, after trimming surrounding whitespace, is exactly `ok proceed` (case-insensitive, standalone — nothing before or after it). A message that merely contains, quotes, or mentions the phrase does NOT approve — see **Approval rules** below.
 > 6. Do NOT call any source-file write tool (`patch`, `write`, `edit`, `create_file`, `delete_file`, or equivalent) before approval. Read-only tools (`search_files`, `view`/`read`) and the single `.plan/todo.md` write are allowed during planning; nothing else.
@@ -24,7 +24,7 @@ category: svelte
 > - The check is an exact match, not a substring search: the user's latest message, trimmed of surrounding whitespace, must equal `ok proceed`, case-insensitive, with no other content. Messages that contain the phrase inside other text — "don't say ok proceed yet", "why do you keep asking for ok proceed?", "not ok proceed", "ok proceed, and also…" — do NOT approve. Exact match → approved. No exact match → NOT approved. There is no other approval signal.
 > - ❌ **Implicit approval does not exist.** The following reasoning is banned — do not think it, do not write it: "ok proceed is implicitly given", "the user addressing/responding to the plan counts as approval", "I'll take this as approval", "effectively/essentially approved", "since the user replied I may proceed".
 > - These are NOT approval: "yes", "go ahead", "do it", "sounds good", "lgtm", "perfect", questions, revisions, added requirements, compliments, new requests — in any language or phrasing.
-> - Any follow-up that is not approval is **plan feedback**: incorporate it, rewrite the task list in `.plan/todo.md` if it changed (still the one permitted write), re-present the revised plan, and wait again for the exact standalone `ok proceed` message. The gate fully resets on every revision. If a message embeds `ok proceed` inside other text, it is still feedback — tell the user to send `ok proceed` alone if they intend to approve.
+> - Any follow-up that is not approval is **plan feedback**: incorporate it by UPDATING THE SAME pending task list IN PLACE in `.plan/todo.md` — same `T-<n>` ID, same header; modify its `- [ ]` items to match the revised plan (still the one permitted write). A revision NEVER creates a new list, NEVER bumps the `T-<n>` ID, and NEVER leaves the old draft alongside the new one. Then re-present the revised plan and wait again for the exact standalone `ok proceed` message. The gate fully resets on every revision. If a message embeds `ok proceed` inside other text, it is still feedback — tell the user to send `ok proceed` alone if they intend to approve.
 >
 > **Execution scope lock — after approval:**
 > - After "ok proceed" you may create, modify, or delete ONLY files listed in the approved plan's File/folder plan (§1.1). Every unlisted file is frozen — read-only.
@@ -66,6 +66,7 @@ Check `.plan/` first — cheaper than re-scanning the codebase.
   - New request while an incomplete list remains → MANDATORY notice before anything else, e.g. `Note: T-6 is still incomplete (4/7 done) — say "continue" to resume, or I'll proceed with this new request instead.` Never append a new list silently over an unmentioned incomplete one.
   - An incomplete list is NEVER marked abandoned/superseded/closed by the agent on its own initiative. See §4 for the only two ways a list closes.
 - Count `### Summary — T-<n>` blocks (excluding `### Summary — General`). If more than 2, fold down to 2 (§4 self-heal) as the FIRST write of the session, before any plan.
+- Self-heal on duplicate pending lists: if multiple PENDING (all-`- [ ]`, never approved) lists exist for the same request — legacy of the old per-revision-append bug — merge them into ONE pending list under the FIRST `T-<n>` of the set as the first write of the session: keep the latest revision's items, delete the superseded duplicate lists entirely (headers included — never approved, so no `- [~]` record, no Summary).
 - If the file doesn't exist, it is created during planning (Hard Gate step 3).
 
 ### 1. Planning & Task List
@@ -82,7 +83,8 @@ Produce a structured ARCHITECTURE PLAN. No code, no file-write tools while produ
 8. **Risks** — anything that could desync frontend/backend or need different handling across web/iOS/Android.
 9. **Assumptions & Questions for Confirmation** — educated assumptions may shape the PLAN DRAFT, but ALWAYS end with a dedicated bulleted list of clarifying questions. Tasks depending on an unconfirmed assumption are flagged `[needs confirmation]` in the todo list — implementation STOPS at such a task and asks; it never proceeds on an assumption.
 
-Break everything into atomic todo items citing their conventions. Write that exact list to `.plan/todo.md` now (§4 format, all `- [ ]`) — planning output, the one allowed write. Then present the plan, STOP, wait for the exact standalone message `ok proceed`. Do NOT write component/server/schema code in the plan response.
+Break everything into atomic todo items citing their conventions. Write that exact list to `.plan/todo.md` now (§4 format, all `- [ ]`) — planning output, the one allowed write. If a pending list for this request already exists there, rewrite ITS items in place under the same `T-<n>` header instead of appending a new list — one request owns exactly one list from first draft through approval. Then present the plan, STOP, wait for the exact standalone message `ok proceed`.
+- DO NOT write component/server/schema code in the plan response.
 - DO ask for `.env` values when needed.
 - DO end the reply with exactly: `Review this plan — do not implement yet.`
 
@@ -108,8 +110,13 @@ Before modifying any `+page.svelte`, `+page.server.ts`, or `+server.ts`:
 ### 4. Persist Progress — `.plan/todo.md`
 The list is written during planning (Hard Gate step 3); by "ok proceed" it already exists with all items `- [ ]`. This section is maintaining it.
 
-- **Append-only. Only in-place edits allowed:** flipping a task's own checkbox, marking a task (or, only on explicit user instruction, a whole list) `- [~]`, deleting a just-completed list's checklist after its Summary is written, deleting an abandoned list's task lines (its `- [~]` header line stays), folding an aging summary into General. Nothing else is ever rewritten.
-- **IDs:** highest `T-<n>` referenced anywhere in the file + 1 for a new list (start `T-1` if new/empty) — check the General header range, individual summaries, and `⚠ REPEATED` lines. IDs are never reused. Each task gets `T-<n>.<k>`.
+Lifecycle states of a list:
+- PENDING (draft, pre-approval): created on the first plan draft of a request; every plan-feedback revision edits this SAME list IN PLACE — same `T-<n>` ID, same header; items may be added, removed, or reworded, all staying `- [ ]`. Revisions never create a new list, never take a new ID, never leave two drafts coexisting.
+- APPROVED (after the exact standalone `ok proceed`): frozen except for checkbox flips and `- [~]` marks per the rules below.
+- COMPLETED / ABANDONED: handled by the completion and abandonment flows below.
+
+Append-only AFTER approval. Only in-place edits allowed: updating the PENDING draft (pre-approval only, as above), flipping a task's own checkbox, marking a task (or, only on explicit user instruction, a whole list) `- [~]`, deleting a just-completed list's checklist after its Summary is written, deleting an abandoned list's task lines (its `- [~]` header line stays), folding an aging summary into General. Nothing else is ever rewritten.
+- **IDs:** highest `T-<n>` referenced anywhere in the file + 1 for a new list (start `T-1` if new/empty) — check the General header range, individual summaries, and `⚠ REPEATED` lines. IDs are never reused. Each task gets `T-<n>.<k>`. A new ID is allocated ONLY for a genuinely new request/list. Plan-feedback revisions of a PENDING list keep its existing `T-<n>` for the entire planning loop — they edit items in place; they never re-number, never append a parallel list, never reserve an ID.
 - **New list format:**
 
 ```markdown
