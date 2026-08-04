@@ -1,15 +1,22 @@
-# ok-agent 
-Workflow Guardrails & Context Memory for AI Coding Assistants
+# ok-agent
 
-> Two drop-in skills that make AI coding agents **plan before they write, remember what they
-> learn, and leave an auditable trail**:
->
-> - **`/coding-standard`** — the behavior layer: plan gate → approve → implement → verify → persist memory.
-> - **`/app-map`** — the memory layer: one deep scan that turns any codebase into a machine-readable
->   index (`spec.json`) and a human-readable interactive blueprint (`map.html`).
->
-> Both are **language- and framework-agnostic**.
->
+**Cut AI token burn ~40–80% · Kill long-context degradation before it starts**
+
+Long coding sessions are where tokens compound and output quality rots — every prompt re-sends
+the whole history, and buried instructions get forgotten. **ok-agent makes the long session
+obsolete**: one short, cheap session per task, with the agent's full project memory restored
+from disk in ~8k tokens instead of a 50k+ codebase rescan.
+
+Two drop-in skills make that loop work:
+
+- **`/app-map`** — the memory layer: one deep scan turns any codebase into a machine-readable
+  index (`spec.json`) and a human-readable interactive blueprint (`map.html`).
+- **`/coding-standard`** — the behavior layer: plan gate → approve → implement → verify → persist memory,
+  so short sessions stay disciplined instead of sloppy.
+
+Both are **language- and framework-agnostic**. See [Token economics](#-token-economics) for the
+math behind the 40–80% figure.
+
 > ⚠️ **Read the [enforcement model](#enforcement-model--what-these-can-and-cannot-guarantee) before you trust this.**
 > These are very well-designed guardrails — not a sandbox. They *mitigate* known LLM failure modes and
 > make violations conspicuous and auditable. They cannot, on their own, *guarantee* anything, because
