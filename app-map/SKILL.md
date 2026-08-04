@@ -1,7 +1,7 @@
 ---
 name: app-map
 description: Universal application mapping. Use to map ANY project codebase into a self-contained map.html + spec.json — routes, components, DB schema, business logic, integrations, env vars — regardless of stack.
-category: universal
+category: engineering
 ---
 # app-map
 
