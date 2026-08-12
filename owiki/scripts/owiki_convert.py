@@ -21,14 +21,12 @@ files in) and never write agent files.
 Cache: <project>/.owiki-cache.json (SHA-256 + size). Unchanged files skip,
 deleted sources prune, WIKI mirrors RAW exactly.
 
-Figures (PDF raster/vector, standalone images) → WIKI/assets/ with a vision
-caption + Obsidian embed. No reachable vision model → mechanical placeholder
-captions + captions_pending flag; a later run with vision reconverts just
-those files. Never fails on vision.
+Figures (PDF raster/vector, standalone images) → WIKI/assets/ with a
+mechanical caption + Obsidian embed. Semantic descriptions are handled by
+the active owiki agent model, not by a separate service or model setting.
 
 Requires: beautifulsoup4 markdownify pymupdf python-docx openpyxl
-python-pptx pillow pyyaml; LibreOffice only for ODF/legacy; a vision model
-only for captions.
+python-pptx pillow pyyaml; LibreOffice only for ODF/legacy.
 """
 import sys, os, re, json, hashlib, argparse, subprocess, tempfile, time
 from datetime import datetime
@@ -61,94 +59,6 @@ def find_soffice():
 
 
 SOFFICE = find_soffice()
-
-# Vision config via env: OWIKI_VISION_PROVIDER ('ollama'|'openai'),
-# OWIKI_VISION_MODEL, OWIKI_VISION_URL, OWIKI_VISION_API_KEY.
-VISION_PROVIDER = os.environ.get('OWIKI_VISION_PROVIDER', 'ollama').lower()
-VISION_MODEL = os.environ.get('OWIKI_VISION_MODEL', 'gemma4:31b')
-VISION_URL = os.environ.get('OWIKI_VISION_URL',
-                            'http://localhost:11434' if VISION_PROVIDER == 'ollama'
-                            else 'https://api.openrouter.ai/v1').rstrip('/')
-VISION_API_KEY = os.environ.get('OWIKI_VISION_API_KEY', '')
-_VISION_AVAILABLE = None
-
-VISION_PROMPT = (
-    "You are describing a figure extracted from a technical document, for a "
-    "text-only coding agent that cannot see images. State precisely: (1) what "
-    "type of figure it is (photo, schematic, pinout diagram, wiring diagram, "
-    "UI mockup, flowchart, chart, table, or other); (2) every visible label, "
-    "number, pin name and piece of text, verbatim; (3) the layout and what it "
-    "represents; (4) anything that would be needed to reproduce it. Be "
-    "complete and factual. Do not speculate about content you cannot read."
-)
-
-
-def _probe_vision():
-    try:
-        import urllib.request
-        if VISION_PROVIDER == 'ollama':
-            req = urllib.request.Request(f'{VISION_URL}/api/tags',
-                                         headers={'User-Agent': 'owiki'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                return resp.status == 200
-        headers = {'User-Agent': 'owiki'}
-        if VISION_API_KEY:
-            headers['Authorization'] = f'Bearer {VISION_API_KEY}'
-        req = urllib.request.Request(f'{VISION_URL}/models', headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status == 200
-    except Exception:
-        pass
-    return False
-
-
-def vision_available():
-    global _VISION_AVAILABLE
-    if _VISION_AVAILABLE is None:
-        _VISION_AVAILABLE = _probe_vision()
-    return _VISION_AVAILABLE
-
-
-def describe_image(image_path, _retry=True):
-    """Caption one image via the vision model; retries once; None on failure."""
-    global _VISION_AVAILABLE
-    try:
-        with open(image_path, 'rb') as f:
-            import base64
-            b64 = base64.b64encode(f.read()).decode('ascii')
-        import urllib.request
-        if VISION_PROVIDER == 'ollama':
-            body = json.dumps({'model': VISION_MODEL, 'prompt': VISION_PROMPT,
-                               'images': [b64], 'stream': False}).encode('utf-8')
-            req = urllib.request.Request(
-                f'{VISION_URL}/api/generate', data=body,
-                headers={'Content-Type': 'application/json', 'User-Agent': 'owiki'})
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                return (data.get('response') or '').strip() or None
-        ext = os.path.splitext(image_path)[1].lower().lstrip('.')
-        mime = {'jpg': 'jpeg', 'jpeg': 'jpeg'}.get(ext, ext)
-        body = json.dumps({'model': VISION_MODEL, 'messages': [{
-            'role': 'user', 'content': [
-                {'type': 'text', 'text': VISION_PROMPT},
-                {'type': 'image_url',
-                 'image_url': {'url': f'data:image/{mime};base64,{b64}'}},
-            ]}]}).encode('utf-8')
-        headers = {'Content-Type': 'application/json', 'User-Agent': 'owiki'}
-        if VISION_API_KEY:
-            headers['Authorization'] = f'Bearer {VISION_API_KEY}'
-        req = urllib.request.Request(f'{VISION_URL}/chat/completions',
-                                     data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            return (data['choices'][0]['message']['content'] or '').strip() or None
-    except Exception:
-        if _retry:
-            time.sleep(2)
-            return describe_image(image_path, _retry=False)
-        _VISION_AVAILABLE = False
-        return None
-
 
 _CTX = {'assets_dir': None, 'slug': None, 'assets': []}
 
@@ -230,11 +140,27 @@ def clean_markdown(text):
 
 
 def summarize(text, max_len=150):
+    # 1. Try the first markdown heading content (usually a section title)
     for line in text.split('\n'):
         stripped = line.strip()
-        if len(stripped) > 30 and not stripped.startswith(('#', '|', '---', '>')):
+        if stripped.startswith('#') and not stripped.startswith('# '):
+            content = stripped.lstrip('#').strip()
+            if (len(content) > 10
+                    and not content.lower().startswith('figure ')
+                    and not content.lower().startswith('include ')
+                    and not content.lower().startswith('define ')):
+                return content[:max_len]
+    # 2. First non-trivial, non-embed, non-header line
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(('#', '|', '---', '>', '![[', '```', '<!--')):
+            continue
+        if len(stripped) > 30:
             return stripped if len(stripped) <= max_len else stripped[:max_len - 3] + '...'
-    return 'Converted from raw source.'
+    # 3. Fallback — empty is better than fake text (enrichment fills it)
+    return ''
 
 
 def _sniff_html_encoding(raw):
@@ -263,6 +189,9 @@ def convert_html(filepath):
     soup = BeautifulSoup(html, 'html.parser')
     for tag in soup.find_all(['style', 'script', 'meta', 'link']):
         tag.decompose()
+    # Demote h1 → h2 in source HTML: the note template already provides # {title}
+    for h1 in soup.find_all('h1'):
+        h1.name = 'h2'
     title_tag = soup.find('title')
     title = title_tag.get_text().strip() if title_tag else ''
     body = soup.find('body') or soup
@@ -295,14 +224,166 @@ def _save_pixmap(pix, dest_path):
     pix.save(dest_path)
 
 
-def _caption_for(asset_name, fallback_info):
-    global _VISION_AVAILABLE
-    if vision_available():
-        caption = describe_image(asset_name)
-        if caption:
-            return caption, False
-    _VISION_AVAILABLE = False
-    return fallback_info, True
+def _caption_for(fallback_info):
+    """Return a deterministic caption; semantic captioning belongs to the active agent."""
+    return fallback_info
+
+
+def _strip_running_headers(pages_text):
+    """Remove lines that repeat on most pages (running headers/footers).
+
+    Detects lines that appear on >50% of pages with near-identical content
+    (digits normalised to #) and strips them from every page.
+    """
+    if len(pages_text) < 3:
+        return pages_text
+    from collections import Counter
+    normalized = []
+    for page_text in pages_text:
+        page_lines = [re.sub(r'\d+', '#', line.strip()) for line in page_text.split('\n')]
+        normalized.append(page_lines)
+    line_pages = Counter()
+    for page_lines in normalized:
+        for line in set(page_lines):
+            if len(line) > 3:
+                line_pages[line] += 1
+    threshold = max(3, len(pages_text) * 0.5)
+    noise_lines = {l for l, c in line_pages.items() if c >= threshold}
+    if not noise_lines:
+        return pages_text
+    result = []
+    for page_text in pages_text:
+        filtered = [line for line in page_text.split('\n')
+                    if re.sub(r'\d+', '#', line.strip()) not in noise_lines]
+        result.append('\n'.join(filtered))
+    return result
+
+
+def _detect_lang(block):
+    """Heuristic language detection for fenced code blocks."""
+    joined = '\n'.join(block)
+    if '<?xml' in joined or re.match(r'^\s*<\w+', joined):
+        return 'xml'
+    if re.search(r'#include\b|int\s+main\s*\(', joined):
+        return 'cpp'
+    if re.search(r'^\s*def\s+\w+|^import\s+\w+|from\s+\w+\s+import', joined, re.MULTILINE):
+        return 'python'
+    if joined.strip().startswith('{') and '"key"' not in joined and ':' in joined:
+        # Could be JSON or a dict literal; check for quoted keys
+        if re.search(r'["\']\w+["\']\s*:', joined):
+            return 'json'
+    if joined.strip().startswith('{') and re.search(r'["\']\w+["\']\s*:', joined):
+        return 'json'
+    return ''
+
+
+def _fence_code_blocks(text):
+    """Detect line-numbered code sequences and fence them.
+
+    PDF text extraction often emits code with all the line numbers grouped
+    together (1\\n2\\n3\\n...\\nN\\n) followed by the code content lines, OR
+    interleaved (1\\n<code>\\n2\\n<code>\\n...). This detects both patterns,
+    strips the numbers, and wraps the code in ```lang fences.
+    """
+    lines = text.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        # Bare number on its own line → potential code-block line number
+        if re.match(r'^\d+$', stripped):
+            # Collect the full sequence of consecutive bare numbers
+            numbers = []
+            j = i
+            expected = int(stripped)
+            while j < len(lines) and re.match(rf'^{expected}$', lines[j].strip()):
+                numbers.append(expected)
+                j += 1
+                expected += 1
+            if len(numbers) >= 5:
+                # Pattern A: all numbers grouped, then code block follows
+                # Check if the line after the number sequence is non-empty
+                # and looks like code (not another heading or paragraph)
+                if j < len(lines):
+                    code_lines = []
+                    k = j
+                    # Collect code until we hit a blank line followed by non-code,
+                    # a page comment, a heading, or end of file
+                    while k < len(lines):
+                        line = lines[k]
+                        next_stripped = line.strip()
+                        if not next_stripped:
+                            # Allow blank lines in code — only stop if we see
+                            # 3+ consecutive blanks (definitely end of code block)
+                            blk_count = 0
+                            for m in range(k, min(k + 3, len(lines))):
+                                if not lines[m].strip():
+                                    blk_count += 1
+                                else:
+                                    break
+                            if blk_count >= 3:
+                                break
+                            code_lines.append(line)
+                            k += 1
+                            continue
+                        if next_stripped.startswith('<!-- page'):
+                            break
+                        # Stop at markdown headings (# followed by space) but not
+                        # C preprocessor directives (#include, #define, etc.)
+                        if next_stripped.startswith('#') and (
+                            len(next_stripped) == 1 or next_stripped[1] == ' '
+                        ):
+                            break
+                        if next_stripped.startswith('![[assets/'):
+                            break
+                        if next_stripped.startswith('### Figure'):
+                            break
+                        # Stop if we see a new number sequence starting (1, 2...)
+                        # that belongs to a different code block
+                        if re.match(r'^1$', next_stripped):
+                            if k + 1 < len(lines) and re.match(r'^2$', lines[k + 1].strip()):
+                                break
+                        # Stop at prose lines that introduce a new code block
+                        # (contain words and end with ':')
+                        if (len(next_stripped) > 15 and next_stripped.endswith(':')
+                                and ' ' in next_stripped
+                                and not next_stripped.startswith('//')
+                                and not next_stripped.startswith('#')):
+                            break
+                        code_lines.append(line)
+                        k += 1
+                    if len(code_lines) >= 3:
+                        lang = _detect_lang(code_lines)
+                        result.append(f'```{lang}')
+                        result.extend(code_lines)
+                        result.append('```')
+                        i = k
+                        continue
+                # Pattern B: interleaved (number → code → number → code)
+                # Not seen in practice but handle gracefully
+                block = []
+                j2 = i
+                exp2 = int(stripped)
+                while j2 < len(lines) and re.match(rf'^{exp2}$', lines[j2].strip()):
+                    if j2 + 1 < len(lines):
+                        next_line = lines[j2 + 1].strip()
+                        if re.match(r'^\d+$', next_line):
+                            break
+                        block.append(lines[j2 + 1])
+                        j2 += 2
+                        exp2 += 1
+                    else:
+                        break
+                if len(block) >= 3:
+                    lang = _detect_lang(block)
+                    result.append(f'```{lang}')
+                    result.extend(block)
+                    result.append('```')
+                    i = j2
+                    continue
+        result.append(lines[i])
+        i += 1
+    return '\n'.join(result)
 
 
 def convert_pdf(filepath):
@@ -316,12 +397,10 @@ def convert_pdf(filepath):
     _CTX['assets'] = []
     seen_xrefs = set()
     figure_no = 0
-    any_pending = False
+    pages_text = []
+    pages_images = []
     for page_num, page in enumerate(doc):
         text = page.get_text("text")
-        page_md = []
-        if text.strip():
-            page_md.append(f"## Page {page_num + 1}\n{text}")
         image_sections = []
         for img in page.get_images(full=True):
             xref = img[0]
@@ -343,10 +422,9 @@ def convert_pdf(filepath):
                 _CTX['assets'].append(_asset_rel(name))
             except Exception:
                 continue
-            caption, pending = _caption_for(
-                dest, f'Embedded figure {figure_no} from page {page_num + 1} '
-                      f'({w}×{h}px). Configure OWIKI_VISION_* to auto-describe.')
-            any_pending = any_pending or pending
+            caption = _caption_for(
+                f'Embedded figure {figure_no} from page {page_num + 1} '
+                f'({w}×{h}px). The active owiki model can add a semantic description.')
             image_sections.append(
                 f'### Figure {figure_no} — page {page_num + 1}\n'
                 f'> {caption}\n'
@@ -363,23 +441,35 @@ def convert_pdf(filepath):
                 _CTX['assets'].append(_asset_rel(name))
             except Exception:
                 continue
-            caption, pending = _caption_for(
-                dest, f'Vector drawing {figure_no} from page {page_num + 1} '
-                      f'(rendered at {RENDER_DPI} DPI). Configure OWIKI_VISION_* '
-                      f'to auto-describe.')
-            any_pending = any_pending or pending
+            caption = _caption_for(
+                f'Vector drawing {figure_no} from page {page_num + 1} '
+                f'(rendered at {RENDER_DPI} DPI). The active owiki model can add a semantic description.')
             image_sections.append(
                 f'### Figure {figure_no} — page {page_num + 1} (schematic)\n'
                 f'> {caption}\n'
                 f'![[{_asset_rel(name)}]]')
             print(f"      🖼  {name} (vector render)")
+        pages_text.append(text)
+        pages_images.append(image_sections)
+    doc.close()
+
+    # Strip repeated running headers/footers across pages
+    pages_text = _strip_running_headers(pages_text)
+
+    # Assemble — HTML comments for page provenance, no ## Page headers, no --- separators
+    for idx, (text, image_sections) in enumerate(zip(pages_text, pages_images)):
+        page_md = []
+        if text.strip():
+            page_md.append(f'<!-- page {idx + 1} -->\n{text}')
         if image_sections:
             page_md.append('\n'.join(image_sections))
         if page_md:
-            md_lines.append('---\n' + '\n'.join(page_md))
-    doc.close()
-    _CTX['captions_pending'] = any_pending and bool(_CTX['assets'])
-    return clean_markdown('\n'.join(md_lines)), os.path.splitext(os.path.basename(filepath))[0]
+            md_lines.append('\n'.join(page_md))
+
+    body = '\n\n'.join(md_lines)
+    # Fence code blocks (detect line-number prefixes, strip them, wrap in ```lang)
+    body = _fence_code_blocks(body)
+    return clean_markdown(body), os.path.splitext(os.path.basename(filepath))[0]
 
 
 def convert_image(filepath):
@@ -400,9 +490,8 @@ def convert_image(filepath):
             w, h = im.size
     except Exception:
         w = h = 0
-    caption, pending = _caption_for(
-        dest, f'Image ({w}×{h}px). Configure OWIKI_VISION_* to auto-describe.')
-    _CTX['captions_pending'] = pending
+    caption = _caption_for(
+        f'Image ({w}×{h}px). The active owiki model can add a semantic description.')
     md = (f'## Image\n> {caption}\n\n'
           f'![[{_asset_rel(name)}]]\n\n'
           f'Source: RAW/{os.path.basename(filepath)}')
@@ -497,7 +586,7 @@ def convert_pptx(filepath):
     prs = Presentation(filepath)
     md_lines = []
     for i, slide in enumerate(prs.slides, 1):
-        md_lines.append(f'---\n## Slide {i}\n')
+        md_lines.append(f'## Slide {i}\n')
         for shape in slide.shapes:
             if not shape.has_text_frame:
                 continue
@@ -705,6 +794,48 @@ def parse_note_frontmatter(content):
     return meta if isinstance(meta, dict) else None
 
 
+def _metadata_list(value):
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return [str(value)] if value else []
+
+
+def _asset_basename(asset_path):
+    """Return the generated asset filename, never allowing path traversal."""
+    return os.path.basename(os.path.normpath(str(asset_path)))
+
+
+def cleanup_generated_outputs(wiki_dir, assets_dir, current_wiki_files, current_assets):
+    """Remove generated notes/assets that no longer have a RAW source."""
+    removed_notes = 0
+    for name in os.listdir(wiki_dir):
+        path = os.path.join(wiki_dir, name)
+        if (os.path.isfile(path) and name.lower().endswith('.md')
+                and name not in current_wiki_files):
+            os.remove(path)
+            print(f"    ✓ Removed orphan: {name}")
+            removed_notes += 1
+
+    current_assets = {_asset_basename(name) for name in current_assets}
+    removed_assets = 0
+    if os.path.isdir(assets_dir):
+        for root, dirs, files in os.walk(assets_dir, topdown=False):
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.relpath(path, assets_dir) not in current_assets:
+                    os.remove(path)
+                    removed_assets += 1
+            for name in dirs:
+                path = os.path.join(root, name)
+                try:
+                    os.rmdir(path)
+                except OSError:
+                    pass
+    if removed_assets:
+        print(f"    ✓ Removed {removed_assets} orphaned asset(s)")
+    return removed_notes, removed_assets
+
+
 SUPPORTED_EXT = {'.html', '.htm', '.txt', '.md', '.pdf',
                  '.docx', '.xlsx', '.pptx', '.csv',
                  '.odt', '.ods', '.odp', '.doc', '.xls', '.ppt', '.rtf',
@@ -741,18 +872,6 @@ def run_project(project_dir, force):
     project_name = os.path.basename(project_dir)
     cache = load_cache(cache_path)
     cache_changed = False
-
-    if not force:
-        pending = [f for f, e in cache.items() if e.get('captions_pending')]
-        if pending:
-            print(f"  Found {len(pending)} file(s) with pending captions — checking vision…")
-            if vision_available():
-                print(f"  ✅ Vision reachable ({VISION_PROVIDER}/{VISION_MODEL}) — will re-caption")
-                for f in pending:
-                    cache[f]['hash'] = None
-                cache_changed = True
-            else:
-                print(f"  ⚠ Vision not reachable — {len(pending)} file(s) keep pending captions")
 
     raw_files = sorted([f for f in os.listdir(raw_dir)
                         if os.path.splitext(f)[1].lower() in SUPPORTED_EXT])
@@ -793,24 +912,33 @@ def run_project(project_dir, force):
                         'slug': slug, 'title': str(meta.get('title', slug)),
                         'category': str(meta.get('category', 'general')),
                         'tags': [str(t) for t in tags],
-                        'summary': str(meta.get('summary', ''))}
+                        'summary': str(meta.get('summary', '')),
+                        'assets': _metadata_list(meta.get('images'))}
                     print(f"  ✓ Skip (unchanged): {fname}")
                     continue
                 # unparseable frontmatter → reconvert, never silently drop
         to_convert.append((fname, slug, fpath, fhash, fsize))
 
     converted_count = 0
+    failed_count = 0
     for fname, slug, fpath, fhash, fsize in to_convert:
         print(f"  Converting: {fname} → {slug}.md")
         _CTX['assets_dir'] = assets_dir
         _CTX['slug'] = slug
         _CTX['assets'] = []
-        _CTX['captions_pending'] = False
-        body_md, extracted_title = convert_file(fpath)
+        try:
+            body_md, extracted_title = convert_file(fpath)
+        except Exception as exc:
+            body_md, extracted_title = None, str(exc)
         file_assets = list(_CTX['assets'])
-        captions_pending = bool(_CTX.get('captions_pending'))
         if body_md is None:
-            print(f"    ⚠ Skipped (conversion failed): {fname}")
+            failed_count += 1
+            detail = f": {extracted_title}" if extracted_title else ''
+            print(f"    ⚠ Skipped (conversion failed){detail}: {fname}")
+            for asset_rel in file_assets:
+                asset_path = os.path.join(assets_dir, _asset_basename(asset_rel))
+                if os.path.isfile(asset_path):
+                    os.remove(asset_path)
             # keep last good note alive so orphan cleanup can't delete it
             old_entry = cache.get(fname)
             old_wiki_file = old_entry.get('wiki_file') if old_entry else None
@@ -827,7 +955,8 @@ def run_project(project_dir, force):
                             'title': str(old_meta.get('title', old_slug)),
                             'category': str(old_meta.get('category', 'general')),
                             'tags': [str(t) for t in (old_tags if isinstance(old_tags, list) else [old_tags])],
-                            'summary': str(old_meta.get('summary', ''))}
+                            'summary': str(old_meta.get('summary', '')),
+                            'assets': _metadata_list(old_meta.get('images'))}
                         print(f"    ↳ keeping last good version: {old_wiki_file}")
             continue
         title = extracted_title or slug.replace('-', ' ')
@@ -835,25 +964,15 @@ def run_project(project_dir, force):
         tags = infer_tags(fname, title)
         summary = summarize(body_md)
         notes_data[slug] = {'slug': slug, 'title': title, 'category': category,
-                            'tags': tags, 'summary': summary}
+                            'tags': tags, 'summary': summary, 'assets': file_assets}
         frontmatter = build_frontmatter(title, fname, category, tags,
                                         project_name, summary, images=file_assets)
         tags_badge = ' '.join(f'`#{t}`' for t in tags)
         related = build_related_links(slug, notes_data)
-        pending_note = ''
-        if captions_pending:
-            pending_note = ('\n> ⚠️ **Captions pending:** no vision model was reachable '
-                            'when this note was built. Figure descriptions are '
-                            'mechanical placeholders. Run owiki again with '
-                            '`OWIKI_VISION_*` configured to complete them.\n')
         full_content = f"""{frontmatter}
 
 # {title}
 
-> {summary}
->
-> **Tags:** {tags_badge}
-{pending_note}
 ---
 
 {body_md}
@@ -878,7 +997,6 @@ def run_project(project_dir, force):
         cache[fname] = {'hash': fhash, 'size': fsize,
                         'converted': datetime.now().isoformat(),
                         'wiki_file': slug + '.md',
-                        'captions_pending': captions_pending,
                         'assets': file_assets}
         cache_changed = True
         converted_count += 1
@@ -907,36 +1025,29 @@ def run_project(project_dir, force):
         f.write(build_index(project_name, notes_data))
     print(f"    ✓ Index: {os.path.join(wiki_dir, '_Index.md')}")
 
-    # orphan cleanup: cache-driven, exact per-note asset lists
+    # WIKI is generated output: remove stale notes/assets even when they are
+    # absent from an old or damaged cache.
     current_wiki_files = {d['slug'] + '.md' for d in notes_data.values()}
     current_wiki_files.add('_Index.md')
-    removed = 0
+    current_assets = [asset for data in notes_data.values()
+                      for asset in data.get('assets', [])]
+    cleanup_generated_outputs(wiki_dir, assets_dir, current_wiki_files,
+                              current_assets)
     for src_fname in list(cache.keys()):
-        entry = cache[src_fname]
-        wiki_file = entry.get('wiki_file')
-        if wiki_file and wiki_file not in current_wiki_files:
-            wiki_path = os.path.join(wiki_dir, wiki_file)
-            if os.path.isfile(wiki_path):
-                os.remove(wiki_path)
-                print(f"    ✓ Removed orphan: {wiki_file}")
-                removed += 1
-            for asset_rel in entry.get('assets') or []:
-                asset_path = os.path.join(assets_dir, os.path.basename(asset_rel))
-                if os.path.isfile(asset_path):
-                    os.remove(asset_path)
         if src_fname not in raw_files_set:  # prune deleted sources
             del cache[src_fname]
             cache_changed = True
-    if removed:
-        print(f"    ✓ {removed} orphaned wiki file(s) cleaned")
 
     if cache_changed or force:
         save_cache(cache_path, cache)
         print(f"\nCache saved: {cache_path}")
+    unchanged_count = max(0, len(raw_files) - converted_count - failed_count)
     print(f"\n✅ Done: {converted_count} converted, "
-          f"{len(raw_files) - converted_count} unchanged, "
+          f"{unchanged_count} unchanged, "
           f"{len(notes_data)} total notes in WIKI/")
-    return 0
+    if failed_count:
+        print(f"⚠ {failed_count} file(s) could not be converted.")
+    return 1 if failed_count else 0
 
 
 def vault_config_path():
@@ -1272,7 +1383,10 @@ def ensure_knowledge_md(project_root, vault_project_dir, project_name, last_upda
         f'\n'
         f'- Read `_Index.md` **first** — it lists every note by category.\n'
         f'- Notes are generated by the `owiki` skill from `RAW/` (read-only\n'
-        f'  source input). **WIKI/ is generated output — never edit it.**\n'
+        f'  source input). WIKI notes are extracted by the converter and\n'
+        f'  enriched by the active agent model (summaries, tags, figure\n'
+        f'  descriptions, body cleanup). The cache preserves enrichment for\n'
+        f'  unchanged files.\n'
         f'- Edit the original files in RAW/ and re-run owiki to update the wiki.\n'
         f'- YAML frontmatter (`title`, `category`, `tags`, `source`) is\n'
         f'  programmatically readable by agents.\n'
