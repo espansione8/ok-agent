@@ -16,23 +16,23 @@ category: svelte
 > - When a route or lib authenticates via a hardcoded secret, describe the mechanism and the file location, but redact the value. Wording pattern: "The [id] path segment is a hardcoded shared secret (value redacted — see src/routes/api/report/[id]/+server.ts; must be rotated and moved to env)."
 > - Log every hardcoded secret you discover under `businessLogic.security_notes` so the next agent knows it must be rotated and externalized.
 > - **Two files, one fact set:** `spec.json` and `map.html` carry the same descriptions. Any redaction applied to one MUST be applied to the other in the same change — a secret patched out of `spec.json` while `map.html` still displays it is exactly the leak this gate exists to prevent.
-> - When filling route cards, copy the already-redacted description from `spec.json` verbatim — NEVER re-read the source file and paste the raw value into a `data-desc`/`.desc`.
+> - When filling route cards, copy the already-redacted description from `spec.json` — NEVER re-read the source file and paste the raw value into a `data-desc`/`.desc`.
 
 Map any project codebase into a single self-contained `map.html` page and a `spec.json` data file. The output gives the next AI agent full application context — routes, components, database schema, business logic, integrations, env vars — without re-scanning the codebase. `spec.json` must stand alone: a future agent can understand the app's structure and logic, and make a correct change or debug an issue, from `spec.json` alone.
 
 ## Use this skill when
 - The user asks to "map this project", "create an app structure map", "generate project documentation as HTML", or calls this skill
 - Preserving codebase context for a future agent session
-- `.plan/spec.json` needs a small patch after a code change → **Incremental update mode** below
+- `plan/spec.json` needs a small patch after a code change → **Incremental update mode** below
 
 ## Incremental update mode
-If `.plan/spec.json` already exists and this skill is invoked only to reflect a small code change (e.g. called by `svelte-coding-standards` after a todo item changes something `spec.json` tracks):
+If `plan/spec.json` already exists and this skill is invoked only to reflect a small code change (e.g. called by `svelte-coding-standards` after a todo item changes something `spec.json` tracks):
 - Do **NOT** re-run the 9-step scan or regenerate `map.html`.
 - Read the existing `spec.json`; patch only the keys the change affects (e.g. one `routes[]` entry, one column in `database.tables[]`, one env var).
 - Bump `generatedAt` to today's date.
 - Leave `map.html` untouched unless the user explicitly asks to regenerate the visual map — **EXCEPTION: security fixes. If the patch redacts a secret and `map.html` contains that secret, apply the same redaction to `map.html` in the same change (SECRETS GATE → two files, one fact set).**
 
-Run the full 9-step analysis only when `.plan/spec.json` doesn't exist, or the user explicitly asks to re-map the whole project.
+Run the full 9-step analysis only when `plan/spec.json` doesn't exist, or the user explicitly asks to re-map the whole project.
 
 ## Analysis steps
 Before writing any output, scan the codebase thoroughly — parallel file-picker and code-searcher agents; read key files to understand behavior, not just signatures. Each step feeds a specific part of `spec.json` (mapping listed per step).
@@ -88,11 +88,11 @@ Before writing any output, scan the codebase thoroughly — parallel file-picker
 - Group by: development, database, build/deploy
 - → `spec.json`: `scripts.development[]`, `scripts.database[]`, `scripts.buildAndTest[]`
 
-**Field guide:** each step fills exactly the `spec.json` keys listed on it — fill every one, never skip a key. Additionally, `topology.zones[]` is purely a layout description for `map.html`; `routes[].kind:"external"` entries are non-route infrastructure nodes (databases, third-party APIs) shown on the topology map.
+**Field guide:** each step fills exactly the `spec.json` keys listed on it — fill every one, never skip a key. Additionally, `topology.zones[]` is purely a layout description for `map.html`; `routes[].kind:"external"` entries are non-route infrastructure nodes (databases, third-party APIs) shown on the topology map; `kind:"api"` routes are automatically relocated into the dedicated API row at render time (see critical rules) — list them in zones only if you want to suggest a grouping, the renderer moves them regardless.
 
 ---
 ## Output files
-After analysis: check for an existing `.plan` directory or create it, then produce exactly two files in it.
+After analysis: check for an existing `plan` directory or create it, then produce exactly two files in it.
 
 ### 1. `spec.json`
 The **primary deliverable** — the single source of truth a future AI agent loads *instead of* re-scanning the repository. It must be detailed enough that an agent can locate the right file, understand the surrounding logic, and make a correct edit or fix a bug using `spec.json` alone. Every top-level key corresponds to one analysis step — do not skip a key, and do not summarize away specifics (exact file paths, exact column names, exact env var names, exact command strings). One exception to the "exact specifics" rule: secret VALUES are always redacted (SECRETS GATE) — describe where they live, never what they are.
@@ -239,16 +239,17 @@ A single self-contained HTML file. Use the template below — copy its `<style>`
 
 **Critical rules for the HTML:**
 - The `<style>` block is **universal** — never change it except to add project-specific CSS classes if you truly need one beyond what's provided.
-- The `<script>` block is **universal** and requires no per-project positioning math: wires are computed automatically at runtime from the real rendered position of each `.rcard` via `getBoundingClientRect()` — you never calculate coordinates by hand. You only supply two things: (1) which `.rcard` elements exist and which zone/column they sit in (plain DOM/flexbox layout, no absolute positioning), and (2) the `EDGES` array (built by flattening `routes[].links` from `spec.json` — see the comment above `var EDGES` in the script).
-- Section 01's topology is built from `spec.json → topology.zones`. Each zone is either `{"kind":"gate"}` (render a `<div class="gate">` stripe, no cards) or `{"kind":"zone","layout":"stack"|"columns", ...}`. `layout:"stack"` → `<div class="zone">` (add class `hi` if `"emphasis":true`) with the route cards as **direct children**, ignoring the `columns` sub-array grouping. `layout:"columns"` → `<div class="zone dash">` with **one `<div class="col">` per inner array** in `columns`, each containing that array's route cards in order.
-- Every `.rcard` needs: a unique `id` matching a `routes[].id`, the `acc-<accent>` class (or bare class `ext` for `kind:"external"`, which uses the dashed external-node style instead of an `acc-*` class), and `data-route` / `data-method` / `data-file` / `data-desc` / `data-tags` attributes copied straight from the matching `spec.json` route object — the inspector drawer reads these attributes directly, nothing else to wire up.
+- The `<script>` block is **universal** and requires no per-project positioning math: wires are computed automatically at runtime from the real rendered position of each `.rcard` via `getBoundingClientRect()` — you never calculate coordinates by hand. You only supply two things: (1) which `.rcard` elements exist and which row/zone/column they sit in (plain DOM/flexbox layout, no absolute positioning), and (2) the `EDGES` array (built by flattening `routes[].links` from `spec.json` — see the comment above `var EDGES` in the script). The viewport is also drag-to-scroll: when a row overflows the screen, the user can drag the canvas sideways (built into the script — a drag starts only on empty canvas space, so cards keep their hover/click behavior).
+- Section 01's topology is built from `spec.json → topology.zones`, rendered as **two stacked rows inside one canvas**. First, pull every `routes[]` entry with `kind:"api"` out of wherever `topology.zones` lists it. The **top row** (`.topo-row`) renders only the remaining routes: `{"kind":"gate"}` entries as `<div class="gate">` stripes (no cards); `layout:"stack"` zones as `<div class="zone">` (add class `hi` if `"emphasis":true`) with the route cards as **direct children**, ignoring the `columns` sub-array grouping; `layout:"columns"` zones as `<div class="zone dash">` with **one `<div class="col">` per inner array** in `columns`, each containing that array's route cards in order. The **bottom row** renders every extracted `kind:"api"` route as `.rcard acc-api` inside a `<div class="zone dash">` labeled "api rails", grouped into `.col` blocks of up to ~10 cards. Page→API `links` stay in `EDGES` unchanged — hovering a page still traces its wires down into the API row.
+- Every `.rcard` needs: a unique `id` matching a `routes[].id`, the `acc-<accent>` class (or bare class `ext` for `kind:"external"`, which uses the dashed external-node style instead of an `acc-*` class), and `data-route` / `data-method` / `data-file` / `data-desc` / `data-tags` attributes copied from the matching `spec.json` route object — the inspector drawer reads these attributes directly, nothing else to wire up.
+- **Route card descriptions are terse:** `data-desc` / `.desc` holds a 2–6 word summary of what the route does — derived from the `spec.json` description (already redacted — never re-read source files), never the full paragraph, which stays detailed in `spec.json` only. Examples: `/market` → "marketplace for used items", `/dashboard` → "overview of application stats". The CSS clamps `.desc` to 2 lines and cards are 186px wide — if a summary doesn't fit, shorten it, don't widen the card.
 - Replace the `EDGES` array with one entry per `routes[].links[]` item, flattened: `[route.id, link.to, link.type, link.label]`.
 - Section 02 (`.grid-c` of `.ccard`) ← `components[]`. Section 03 (`.grid-s` of `.scard`, twice — once for `stores[]`, once for `serverLibs[]`) ← as documented in the template comments, the two usages populate slightly different fields. Section 04 (`.db-board` of `.db-col`/`.tcard` + `.rel`) ← `database.tables[]` / `database.relationships[]`, with `category` mapped to `cat-1`..`cat-7` in first-seen order (8th+ distinct category: omit the `cat-N` class). Section 05 (`.stackrow`, `.cmdgrid`, `.envcard`) ← `stackItems[]`, `scripts.*[]`, `environmentVariables[]` grouped by `required` then by `topic`.
 - The inspector drawer (`<aside class="insp">`) works automatically off the same `data-*` attributes and the `EDGES` array — do not hand-wire it. Its close behavior is the template's single shared `closeInspector()` (✕ button AND Escape both remove `.open` and set `aria-hidden="true"`) — do not split it back into separate handlers.
 - HTML-escape EVERY project-derived string before writing it into `map.html` — both inside `data-*` attribute values and in visible text (`.route`, `.file`, `.desc`, `.cdesc`, `.sdesc`, `.cols`, `.vd`, `.cmdline`, zone labels). Minimum escaping: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, and inside attribute values `"` → `&quot;`. Placeholders like `<folderName>` / `<fileName>` must be written `&lt;folderName&gt;` / `&lt;fileName&gt;` — unescaped, the browser parses them as phantom start tags, the placeholders vanish from the rendered text, and the following text gets nested inside invisible elements. Mechanical check in FINAL REMINDER (c): any `<` inside a `data-*` value or any raw `<placeholder>` token in card text is a failed validation.
-- Sections 02–05 are 1:1 renderings of the `spec.json` arrays — iterate the FULL array for each section in a single pass, never hand-pick entries or write cards from memory (a card list written "by eye" is exactly how an entry gets dropped). Every `components[]` entry → one `.ccard`; every `stores[]` entry → one `.scard` in the stores grid; every `serverLibs[]` entry → one `.scard` in the server libs grid; every `database.tables[]` entry → one `.tcard`; every `database.relationships[]` entry → one `.rel .r`; every `environmentVariables[]` entry → one `.envrow`; every `stackItems[]` entry → one `.stk`. No entry may be dropped (e.g. if `components[]` defines C-12, the ledger renders 12 cards, not 11).
-- Every count printed in `map.html` — the masthead `.sheetmeta` line, each section's `.statrow` numbers, and each `.sec-sub` tally (e.g. "N live · M dormant") — must be computed from the same `spec.json` arrays it renders, AFTER the final card list is written, using the mechanical `grep -c` checks in FINAL REMINDER (b) — never by eye. The Section 02 live/dormant split must equal the `status` values in `components[]`; the Section 01 stat counters must equal the actual route `kind`/`accent` distribution.
-- SECRETS GATE applies to `map.html` too: no secret value may appear in any `data-desc`, `.desc`, `.file`, `.cols`, or card text — the same redacted wording as in `spec.json`. Copy route descriptions verbatim from `spec.json` (already redacted) — NEVER re-derive them from the source files. If a secret is redacted in `spec.json` after `map.html` was generated, patch `map.html` in the same change (SECRETS GATE → two files, one fact set).
+- Sections 02–05 are 1:1 renderings of the `spec.json` arrays — iterate the FULL array for each section in a single pass, never hand-pick entries or write cards from memory (a card list written "by eye" is exactly how an entry gets dropped). Every `components[]` entry → one `.ccard`; every `stores[]` entry → one `.scard` in the stores grid; every `serverLibs[]` entry → one `.scard` in the server libs grid; every `database.tables[]` entry → one `.tcard`; every `database.relationships[]` entry → one `.rel .r`; every `environmentVariables[]` entry → one `.envrow`; every `stackItems[]` entry → one `.stk`. No entry may be dropped (e.g. if `components[]` defines C-12, the ledger renders 12 cards, not 11). Every `routes[]` entry → one `.rcard`, placed by `kind` (pages row / API row / external node) — none dropped either.
+- Every count printed in `map.html` — the masthead `.sheetmeta` line, each section's `.statrow` numbers, and each `.sec-sub` tally (e.g. "N live · M dormant") — must be computed from the same `spec.json` arrays it renders, AFTER the final card list is written, using the mechanical `grep -c` checks in FINAL REMINDER (b) — never by eye. The Section 02 live/dormant split must equal the `status` values in `components[]`; the Section 01 stat counters must equal the actual route `kind`/`accent` distribution (api rails = `kind:"api"` count).
+- SECRETS GATE applies to `map.html` too: no secret value may appear in any `data-desc`, `.desc`, `.file`, `.cols`, or card text — the same redacted wording as in `spec.json`. Copy route descriptions from `spec.json` (already redacted) — NEVER re-derive them from the source files. If a secret is redacted in `spec.json` after `map.html` was generated, patch `map.html` in the same change (SECRETS GATE → two files, one fact set).
 
 ---
 ## HTML template
@@ -380,16 +381,23 @@ border:1px dashed var(--line);padding:12px 16px;margin-bottom:18px;background:rg
 .legend .ln.auth{border-color:var(--amber);border-top-style:dashed}
 .legend .hint{margin-left:auto;color:var(--ink-faint)}
 .legend .hint b{color:var(--amber)} .legend .hint i{color:var(--blue);font-style:normal}
-/* horizontal scroll viewport — vertical expands with content */
-.topo-scroll{overflow-x:auto;overflow-y:visible;padding-bottom:14px;
+/* full-width viewport — rows only scroll if they genuinely overflow; draggable when they do */
+.topo-scroll{overflow-x:auto;overflow-y:visible;padding-bottom:14px;cursor:grab;
 scrollbar-color:var(--green) var(--line-soft)}
 .topo-scroll::-webkit-scrollbar{height:11px}
 .topo-scroll::-webkit-scrollbar-track{background:var(--line-soft)}
 .topo-scroll::-webkit-scrollbar-thumb{background:#23324a;border:2px solid var(--line-soft)}
 .topo-scroll::-webkit-scrollbar-thumb:hover{background:var(--green)}
-.topo-canvas{position:relative;display:flex;align-items:stretch;gap:30px;
-min-width:max-content;padding:26px 30px 30px}
-.topo-wires{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;overflow:visible}
+/* canvas stacks the two rows (pages row, then api row); wires span both */
+.topo-canvas{position:relative;display:flex;flex-direction:column;gap:26px;
+min-width:max-content;padding:22px 16px 26px}
+.topo-row{display:flex;align-items:stretch;gap:22px;min-width:max-content}
+/* CRITICAL — the wire SVG MUST be absolutely positioned, never in flow:
+draw() sizes it to canvas.scrollWidth/scrollHeight, and if it is a flex
+child of .topo-canvas (a flex column) its own height feeds back into
+scrollHeight → infinite growth loop (page gets longer forever, scrollbar
+shrinks). Do NOT remove or "simplify" this rule. */
+.topo-wires{position:absolute;left:0;top:0;pointer-events:none}
 .wire{fill:none;stroke-width:1.6;opacity:.42;transition:opacity .2s,stroke-width .2s}
 .wire.flow{stroke:var(--green)} .wire.admin{stroke:var(--coral);stroke-dasharray:7 6}
 .wire.api{stroke:var(--blue);stroke-dasharray:3 5} .wire.util{stroke:var(--violet)}
@@ -400,16 +408,16 @@ min-width:max-content;padding:26px 30px 30px}
 paint-order:stroke;stroke:var(--bg);stroke-width:3px;opacity:0;transition:opacity .2s}
 .wire-label.hot{opacity:1;fill:var(--ink-dim)}
 /* zone group boxes */
-.zone{position:relative;z-index:1;display:flex;flex-direction:column;gap:18px;padding:30px 18px 18px;
-border:1px solid var(--line);background:linear-gradient(180deg,rgba(14,19,28,.55),rgba(8,11,17,.2));min-width:300px}
+.zone{position:relative;z-index:1;display:flex;flex-direction:column;gap:14px;padding:28px 12px 14px;
+border:1px solid var(--line);background:linear-gradient(180deg,rgba(14,19,28,.55),rgba(8,11,17,.2));min-width:212px}
 .zone.hi{border-color:rgba(244,183,64,.35);box-shadow:0 0 60px -28px var(--amber) inset}
-.zone.dash{flex-direction:row;align-items:stretch;gap:24px;min-width:0;padding-top:34px}
-.zone .zlabel{position:absolute;top:-1px;left:18px;transform:translateY(-50%);
+.zone.dash{flex-direction:row;align-items:stretch;gap:18px;min-width:0;padding-top:32px}
+.zone .zlabel{position:absolute;top:-1px;left:12px;transform:translateY(-50%);
 font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;
 background:var(--bg);padding:3px 10px;color:var(--ink-dim);border:1px solid var(--line)}
 .zone.hi .zlabel{color:var(--amber);border-color:rgba(244,183,64,.4)}
 .zone.dash .zlabel{color:var(--green);border-color:rgba(52,216,160,.4)}
-.col{display:flex;flex-direction:column;gap:18px;min-width:288px}
+.col{display:flex;flex-direction:column;gap:14px;min-width:186px}
 /* auth gate stripe */
 .gate{position:relative;z-index:1;width:46px;flex:0 0 46px;align-self:stretch;
 background:repeating-linear-gradient(135deg,rgba(244,183,64,.16) 0 9px,transparent 9px 18px);
@@ -417,20 +425,21 @@ border-left:1px solid rgba(244,183,64,.4);border-right:1px solid rgba(244,183,64
 display:flex;align-items:center;justify-content:center}
 .gate span{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--mono);
 font-size:10px;letter-spacing:.4em;color:var(--amber);text-transform:uppercase}
-/* route card */
-.rcard{position:relative;z-index:2;width:288px;background:var(--panel);
+/* route card — compact: narrow width + terse desc clamped to 2 lines */
+.rcard{position:relative;z-index:2;width:186px;background:var(--panel);
 border:1px solid var(--line);border-left:3px solid var(--ink-faint);
-padding:13px 14px 12px;cursor:pointer;transition:transform .16s,box-shadow .2s,border-color .2s,background .2s}
+padding:10px 11px 9px;cursor:pointer;transition:transform .16s,box-shadow .2s,border-color .2s,background .2s}
 .rcard:hover{transform:translateY(-3px);background:#121a26}
 .rcard.linked{box-shadow:0 0 0 1px currentColor,0 10px 30px -16px currentColor}
-.rcard .top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-.rcard .route{font-family:var(--mono);font-weight:700;font-size:14.5px;letter-spacing:-.01em;word-break:break-all}
-.rcard .meth{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
-color:var(--ink-dim);border:1px solid var(--line);padding:3px 7px;display:flex;align-items:center;gap:6px;white-space:nowrap}
-.rcard .meth .dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
-.rcard .file{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:7px 0 6px;line-height:1.45;word-break:break-all}
-.rcard .desc{font-size:12.5px;color:var(--ink-dim);line-height:1.42;margin:0 0 9px}
-.rcard .tags{display:flex;flex-wrap:wrap;gap:5px}
+.rcard .top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.rcard .route{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:-.01em;word-break:break-all}
+.rcard .meth{flex:0 0 auto;font-family:var(--mono);font-size:8px;letter-spacing:.08em;
+color:var(--ink-dim);border:1px solid var(--line);padding:2px 6px;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.rcard .meth .dot{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
+.rcard .file{font-family:var(--mono);font-size:8px;color:var(--ink-faint);margin:5px 0 4px;line-height:1.4;word-break:break-all}
+.rcard .desc{font-size:9.5px;color:var(--ink-dim);line-height:1.3;margin:0 0 6px;
+display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rcard .tags{display:flex;flex-wrap:wrap;gap:4px}
 /* accent → left border + route title colour */
 .acc-admin{border-left-color:var(--coral);color:var(--coral)}      .acc-admin .route{color:var(--coral)}
 .acc-protected{border-left-color:var(--green);color:var(--green)}  .acc-protected .route{color:var(--green)}
@@ -444,8 +453,8 @@ color:var(--ink-dim);border:1px solid var(--line);padding:3px 7px;display:flex;a
 background:repeating-linear-gradient(45deg,rgba(63,182,242,.05) 0 8px,transparent 8px 16px),var(--panel)}
 .rcard.ext .route{color:var(--blue)}
 /* tag chips */
-.tag{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
-padding:2px 7px;border:1px solid currentColor;color:var(--ink-faint);opacity:.92}
+.tag{font-family:var(--mono);font-size:8px;letter-spacing:.12em;text-transform:uppercase;
+padding:1px 6px;border:1px solid currentColor;color:var(--ink-faint);opacity:.92}
 .tag-admin{color:var(--coral)} .tag-protected{color:var(--green)} .tag-public{color:var(--amber)}
 .tag-auth{color:var(--amber)} .tag-api{color:var(--blue)} .tag-dev{color:var(--violet)}
 /* unmapped/custom tags (e.g. SEO, EMAIL, DATA, CREATE...) simply use the neutral base .tag style above —
@@ -652,53 +661,84 @@ N routes · M tables · Database / ORM
 <div class="topo-scroll">
 <div class="topo-canvas" id="canvas">
 <svg class="topo-wires" id="wires"></svg>
-<!-- ADAPT: one <div class="zone[.hi]"> per spec.json → topology.zones[] entry with layout:"stack".
-Add class "hi" only if that zone's "emphasis" is true. Route cards are DIRECT children (no .col wrapper).
-Repeat this whole block for every "stack" zone. -->
+<!-- ================= PAGES ROW — kind:"page" routes ONLY =================
+ADAPT: every kind:"api" route that topology.zones lists is pulled OUT of its
+zone and rendered in the API ROW below instead. This row keeps: one
+<div class="zone[.hi]"> per layout:"stack" zone (cards as DIRECT children, add
+class "hi" only if "emphasis":true), one <div class="gate"> per kind:"gate",
+one <div class="zone dash"> per layout:"columns" zone (one .col per inner
+array, cards in order). kind:"external" nodes stay in this row. -->
+<div class="topo-row">
 <div class="zone hi">
 <span class="zlabel"><!-- ADAPT: zone label --></span>
-<!-- ADAPT: one .rcard per route in this zone's columns (flattened).
-id = routes[].id · class = "rcard acc-<accent>" (or "rcard ext" for kind:"external")
-data-route/data-method/data-file/data-desc/data-tags copied from the matching spec.json route
-object (already redacted — never re-read source files for raw values), HTML-ESCAPED
-(& < > " — see critical rules; never a literal secret value).
+<!-- ADAPT: one .rcard per PAGE route in this zone (flattened columns).
+id = routes[].id · class = "rcard acc-<accent>"
+data-route/data-method/data-file/data-tags copied from the matching spec.json
+route object (already redacted — never re-read source files for raw values),
+HTML-ESCAPED (& < > " — see critical rules; never a literal secret value).
+data-desc = TERSE 2–6 word summary derived from the spec.json description
+(e.g. "marketplace for used items") — NOT the full paragraph.
 The inline <i class="dot" style="..."> override is OPTIONAL — only add it when
-routes[].dotColor is set (amber/blue/violet); omit the style attribute entirely for the default green dot. -->
-<div class="rcard acc-public" id="r-example"
-data-route="/example" data-method="GET"
-data-file="src/routes/example/+page.server.ts"
-data-desc="What this route does."
+routes[].dotColor is set (amber/blue/violet); omit the style attribute entirely
+for the default green dot. -->
+<div class="rcard acc-public" id="r-market"
+data-route="/market" data-method="GET"
+data-file="src/routes/(app)/market/+page.server.ts"
+data-desc="marketplace for used items"
 data-tags="PUBLIC">
-<div class="top"><span class="route">/example</span><span class="meth">GET<i class="dot"></i></span></div>
-<div class="file">src/routes/example/+page.server.ts</div>
-<p class="desc">What this route does.</p>
+<div class="top"><span class="route">/market</span><span class="meth">GET<i class="dot"></i></span></div>
+<div class="file">src/routes/(app)/market/+page.server.ts</div>
+<p class="desc">marketplace for used items</p>
 <div class="tags"><span class="tag tag-public">PUBLIC</span></div>
 </div>
 </div>
 <!-- ADAPT: one <div class="gate"><span>LABEL</span></div> per topology.zones[] entry with kind:"gate".
 Omit entirely if the project has no such boundary (e.g. no auth middleware separating zones). -->
 <div class="gate"><span>auth gate</span></div>
-<!-- ADAPT: one <div class="zone dash"> per topology.zones[] entry with layout:"columns".
+<!-- ADAPT: one <div class="zone dash"> per topology.zones[] entry with layout:"columns" (pages only).
 Inside it, one <div class="col"> per inner array in that zone's "columns", cards in order. -->
 <div class="zone dash">
 <span class="zlabel"><!-- ADAPT: zone label --></span>
 <div class="col">
-<!-- ADAPT: .rcard elements for this column, same structure as above -->
+<!-- ADAPT: page .rcard elements for this column, same structure as above -->
 </div>
 <div class="col">
-<!-- ADAPT: .rcard elements for this column -->
+<!-- ADAPT: page .rcard elements for this column -->
 </div>
 <div class="col">
-<!-- ADAPT: external/dev/api nodes can live in their own column, e.g.: -->
+<!-- ADAPT: kind:"external" nodes stay in the pages row, e.g.: -->
 <div class="rcard ext" id="r-external-db"
 data-route="EXTERNAL · Database name" data-method="◈"
 data-file="Provider / connection mode"
-data-desc="What this external service is used for."
+data-desc="what this service is used for"
 data-tags="DATA">
 <div class="top"><span class="route">EXTERNAL · Database</span><span class="meth">◈<i class="dot" style="background:var(--blue);box-shadow:0 0 7px var(--blue)"></i></span></div>
 <div class="file">Provider / connection mode</div>
-<p class="desc">What this external service is used for.</p>
+<p class="desc">what this service is used for</p>
 <div class="tags"><span class="tag tag-api">DATA</span></div>
+</div>
+</div>
+</div>
+</div>
+<!-- ================= API ROW — every kind:"api" route =================
+ADAPT: one .rcard acc-api per routes[] entry with kind:"api", pulled out of
+topology.zones (see PAGES ROW note). Group into .col blocks of up to ~10 cards.
+Same card structure and terse data-desc rule as the pages row. Page→API links
+stay in EDGES, so hovering a page traces its wires down into this row. -->
+<div class="topo-row">
+<div class="zone dash">
+<span class="zlabel">api rails</span>
+<div class="col">
+<div class="rcard acc-api" id="r-api-example"
+data-route="/api/example" data-method="POST"
+data-file="src/routes/api/example/+server.ts"
+data-desc="short purpose"
+data-tags="API">
+<div class="top"><span class="route">/api/example</span><span class="meth">POST<i class="dot"></i></span></div>
+<div class="file">src/routes/api/example/+server.ts</div>
+<p class="desc">short purpose</p>
+<div class="tags"><span class="tag tag-api">API</span></div>
+</div>
 </div>
 </div>
 </div>
@@ -831,7 +871,8 @@ The .or span is only for a short "(conditional)" note when applicable. -->
 ADAPT: build this array by flattening spec.json → routes[].links.
 For every route object in spec.json, for every entry in its "links" array,
 push [route.id, link.to, link.type, link.label]. Do this for ALL routes
-(including kind:"external" nodes, which can be link targets too). */
+(including kind:"api" routes in the api row and kind:"external" nodes,
+which can be link targets too). */
 var EDGES = [
 ["r-example-a","r-example-b","flow","short label"]
 ];
@@ -997,6 +1038,25 @@ insp.classList.remove("open"); insp.setAttribute("aria-hidden","true");
 document.getElementById("inspClose").addEventListener("click",closeInspector);
 document.addEventListener("keydown",function(e){ if(e.key==="Escape") closeInspector(); });
 
+/* ---------- drag-to-scroll for the topology viewport ----------
+Edge case only: when a row holds more cards than fit on screen, the viewport
+scrolls horizontally AND can be dragged with the mouse. A drag starts only on
+empty canvas space — .rcard elements keep their hover/click behavior. */
+var scroller = document.querySelector(".topo-scroll");
+var drag = {down:false, x:0, left:0};
+scroller.addEventListener("pointerdown", function(e){
+if(e.target.closest(".rcard")) return;
+drag.down = true; drag.x = e.clientX; drag.left = scroller.scrollLeft;
+scroller.style.cursor = "grabbing";
+});
+window.addEventListener("pointermove", function(e){
+if(!drag.down) return;
+scroller.scrollLeft = drag.left - (e.clientX - drag.x);
+});
+window.addEventListener("pointerup", function(){
+if(drag.down){ drag.down = false; scroller.style.cursor = ""; }
+});
+
 /* ---------- draw timing (robust against fonts / layout shifts) ---------- */
 draw();
 window.addEventListener("resize", draw);
@@ -1031,11 +1091,11 @@ document.querySelectorAll(".reveal").forEach(function(el){ el.classList.add("in"
 Once loaded, follow these steps:
 1. **Analyze** the project with the 9-step checklist. Parallel file-pickers/code-searchers; read key files.
 2. **Produce `spec.json`** per the schema — every route (with its `links`), table, column, component, store, server lib, integration, business rule, env var. It must stand alone: another agent reading only `spec.json` can find the right file and make a correct change without re-scanning.
-3. **Produce `map.html`** — copy the CSS and JS blocks verbatim from the template; build Section 01 topology from `spec.json → topology.zones` (plain flexbox zones/columns — no manual coordinate math); flatten `routes[].links` into the `EDGES` array; fill Sections 02–05 straight from the matching `spec.json` arrays per the ADAPT comments — iterating each array in full, one pass, never by eye.
+3. **Produce `map.html`** — copy the CSS and JS blocks verbatim from the template; build Section 01 topology from `spec.json → topology.zones` as the pages row + api row split (plain flexbox rows/zones/columns — no manual coordinate math), with terse 2–6 word card descriptions; flatten `routes[].links` into the `EDGES` array; fill Sections 02–05 straight from the matching `spec.json` arrays per the ADAPT comments — iterating each array in full, one pass, never by eye.
 4. **Validate before finishing — all three checks, mechanically:**
-   (a) **Interactivity** — open `map.html` in a browser: topology interactive (hover = trace wires, click = inspector drawer, Escape AND the ✕ button both close the drawer — and after EITHER trigger the `<aside class="insp">` carries `aria-hidden="true"`; both share the one `closeInspector()` function), all 5 sections render, every `EDGES` entry references two ids that exist as `.rcard` elements on the page.
+   (a) **Interactivity** — open `map.html` in a browser: topology interactive (hover = trace wires — including page→API wires into the api row — click = inspector drawer, Escape AND the ✕ button both close the drawer — and after EITHER trigger the `<aside class="insp">` carries `aria-hidden="true"`; both share the one `closeInspector()` function), all 5 sections render, every `EDGES` entry references two ids that exist as `.rcard` elements on the page. If a row overflows, the scrollbar appears and mouse-drag on empty canvas space scrolls it.
    (b) **Completeness** — cross-check rendered cards against `spec.json` with grep, never by eye (one match per card):
-   - `grep -c 'class="rcard' map.html` == `routes[]` length
+   - `grep -c 'class="rcard' map.html` == `routes[]` length (pages row + api row + external nodes combined)
    - `grep -c 'class="ccard' map.html` == `components[]` length; `grep -c 'class="ccard dorm' map.html` == dormant count — so live cards (total − dormant) == number of `status:"live"` entries, and the printed "N live · M dormant" equals exactly that
    - `grep -c 'class="scard' map.html` == `stores[]` + `serverLibs[]` lengths combined
    - `grep -c 'class="tcard' map.html` == `database.tables[]` length
@@ -1044,6 +1104,6 @@ Once loaded, follow these steps:
    - `grep -c 'class="stk' map.html` == `stackItems[]` length
    Every printed count (sheetmeta, statrow, sec-sub) must match the arrays exactly. Fix any drift — a card dropped or a stale tally is a failed validation.
    (c) **Secrets + escaping** —
-   - For EVERY literal secret value discovered in the codebase (each one logged in `businessLogic.security_notes`): `grep -F -- '<value>' .plan/spec.json .plan/map.html` MUST return zero matches — only the redacted wording may remain in either file.
+   - For EVERY literal secret value discovered in the codebase (each one logged in `businessLogic.security_notes`): `grep -F -- '<value>' plan/spec.json plan/map.html` MUST return zero matches — only the redacted wording may remain in either file.
    - `grep -nE 'data-(route|method|file|desc|tags)="[^"]*<' map.html` MUST return nothing (no unescaped `<` inside any attribute value).
    - No raw placeholder token (`<folderName>`, `<fileName>`, any `<word>`) may survive in visible card text — check the HTML source, not the rendered page.
