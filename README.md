@@ -7,15 +7,20 @@ the whole history, and buried instructions get forgotten. **ok-agent makes the l
 obsolete**: one short, cheap session per task, with the agent's full project memory restored
 from disk in ~8k tokens instead of a 50k+ codebase rescan.
 
-Two drop-in skills make that loop work:
+Three drop-in skills make that loop work:
 
+- **`/owiki`** — the knowledge layer: converts vault RAW files (PDFs, docs, spreadsheets, HTML)
+  into clean Obsidian markdown in `WIKI/`, then enriches each note with summaries, tags, and figure
+  descriptions — giving the agent structured domain knowledge that no codebase scan can recover.
 - **`/app-map`** — the memory layer: one deep scan turns any codebase into a machine-readable
   index (`spec.json`) and a human-readable interactive blueprint (`map.html`).
 - **`/coding-standard`** — the behavior layer: plan gate → approve → implement → verify → persist memory,
   so short sessions stay disciplined instead of sloppy.
 
-Both are **language- and framework-agnostic**. See [Token economics](#-token-economics) for the
-math behind the 40–80% figure.
+All three are **language- and framework-agnostic** — the core process works with any stack.
+The packaged `svelte-*` skill variants are tailored for Svelte 5 / SvelteKit (DaisyUI 5, Drizzle/Turso,
+Runes); the generic skills are designed to accept additional stack profiles. See [Token economics](#-token-economics)
+for the math behind the 40–80% figure.
 
 > ⚠️ **Read the [enforcement model](#enforcement-model--what-these-can-and-cannot-guarantee) before you trust this.**
 > These are very well-designed guardrails — not a sandbox. They *mitigate* known LLM failure modes and
@@ -24,29 +29,35 @@ math behind the 40–80% figure.
 
 ---
 
-## Two skills, one loop
+## Three skills, one loop
 
-`app-map` builds the project's memory; `coding-standard` consumes it, disciplines the work, and keeps it current:
+`owiki` converts project documentation into agent-readable knowledge; `app-map` maps the codebase structure; `coding-standard` consumes both, disciplines the work, and keeps the structural index current:
 
 ```
-                    ┌────────────────────────────────────────────┐
-                    │              app-map (once)                │
-                    │  9-step scan → .plan/spec.json + map.html  │
-                    └───────────────────┬────────────────────────┘
-                                        ▼
- ┌──────────────────────────────────────────────────────────────────────┐
- │                  coding-standard (every task)                        │
- │                                                                      │
- │  read spec.json + todo.md ──▶ plan ──▶ wait "ok proceed" ──▶ implement │
- │         ▲                                          │                 │
- │         │            diff-check every edit ◀───────┘                 │
- │         │                    │                                       │
- │  patch spec.json ◀───── spec.json sync check                         │
- │  (incremental)          append todo.md summary                       │
- └──────────────────────────────────────────────────────────────────────┘
-                                        ▼
+ ┌─────────────────────────────────────────────────────────┐
+ │              app-map (once)                              │
+ │  9-step scan → plan/spec.json + map.html                 │
+ └───────────────────────┬─────────────────────────────────┘
+                         ▼
+ ┌─────────────────────────────────────────────────────────┐
+ │              owiki (on demand)                           │
+ │  RAW/ files → WIKI/ markdown + enrich                    │
+ │  domain docs, specs, PDFs → agent notes                  │
+ └───────────────────────┬─────────────────────────────────┘
+                         ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │                  coding-standard (every task)                     │
+ │                                                                   │
+ │  read spec.json + todo.md + WIKI/ ──▶ plan ──▶ wait "ok proceed"  │
+ │         ▲                                              │          │
+ │         │            diff-check every edit ◀───────────┘          │
+ │         │                    │                                    │
+ │  patch spec.json ◀───── spec.json sync check                      │
+ │  (incremental)          append todo.md summary                    │
+ └──────────────────────────────────────────────────────────────────┘
+                         ▼
               next session starts from ~8k tokens of disk-backed memory
-              instead of a 50k+ codebase rescan
+              (spec.json + todo.md + WIKI/) instead of a 50k+ codebase rescan
 ```
 
 ---
@@ -58,12 +69,15 @@ A single `SKILL.md` loaded into your AI coding assistant. It does **not** teach 
 | Layer | What it imposes |
 |---|---|
 | 🚫 **Hard Gate** | No code written until the user replies with the literal string `ok proceed`. The skill instructs the agent to treat approval as a mechanical string check, never an inference. |
-| 📋 **Architecture Plan** | Every task starts as an atomic, convention-cited todo list written to `.plan/todo.md` *before* approval. |
-| 🔒 **Scope Lock** | After approval, only files listed in the plan may be touched. Scope expansions require re-approval. |
-| 💾 **Project Memory** | `.plan/todo.md` (gotchas, pitfalls, bugs — rolling summaries) + `.plan/spec.json` (structural index from app-map) persist on disk, surviving session restarts. |
-| ✅ **Verification** | Diff check on every edit, comment preservation, typecheck tiers, inline-stated results — every gate is designed to leave an auditable trace. |
+| 📋 **Architecture Plan** | Every task starts as a 10-section architecture plan with hyper-atomic, convention-cited tasks written to `plan/todo.md` *before* approval. One request = one list; revisions edit the same pending list in place. |
+| 🔒 **Scope Lock** | After approval, only files listed in the plan may be touched. Scope expansions require re-approval. Destructive ops (`DELETE:`/`RENAME:`) need an explicit flag + inline authorization statement at execution time. |
+| 💾 **Project Memory** | `plan/todo.md` (rolling gotchas/bugs master list, capped summaries) + `plan/spec.json` (structural index from app-map) persist on disk, surviving session restarts. |
+| ✅ **Verification** | Diff check on every edit (scans for deleted comments + known-constraint violations), stack-specific autofixer/linter on modified files, tiered typechecks, inline-stated results — every gate leaves an auditable trace. |
+| 📝 **Comment & File Permanence** | Comments are never deleted (even dormant boilerplate for future forks). Files are never deleted because they "look" unused. Both rules enforced mechanically via the diff step. |
 
-Stack-specific conventions live in optional `references/<stack>.md` *profiles*; the core works with any language.
+Stack-specific conventions (component structure, server action patterns, input binding rules, import ordering, route path comments) live in optional `references/<stack>.md` profiles. The core gate, plan, and verification process is stack-agnostic. A matching profile adds framework idioms, verification commands, and DB sync conventions; no matching profile? The skill falls back to generic conventions + your project's existing patterns.
+
+> **Note:** The `svelte-coding-standard` skill variant ships with a full Svelte 5 / SvelteKit profile and bundled references (`svelte-ai-prompts.md`, `drizzle-orm-turso-libsql.md`, `mongodb-mongoose.md`).
 
 ## Skill 2 — `app-map`: codebase memory & blueprints
 
@@ -71,15 +85,35 @@ Maps any project into two artifacts that give the **next agent session full cont
 
 | Artifact | Audience | What it is |
 |---|---|---|
-| `.plan/spec.json` | the agent | A standalone structural index: every route (with navigation links), component, store, server module, DB table + columns, auth rule, business rule, env var, and script. Detailed enough that an agent can locate the right file and make a correct edit from `spec.json` alone. |
-| `.plan/map.html` | humans | A single self-contained interactive page — blueprint-style route topology with hover-traced wires and a click-to-inspect drawer, plus component/state/database/stack ledgers. No build step, opens in any browser. |
+| `plan/spec.json` | the agent | A standalone structural index: every route (with navigation links), component, store, server module, DB table + columns, auth rule, business rule, env var, and script. Detailed enough that an agent can locate the right file and make a correct edit from `spec.json` alone. |
+| `plan/map.html` | humans | A single self-contained interactive page — blueprint-style route topology with hover-traced wires and a click-to-inspect drawer, plus component/state/database/stack ledgers. No build step, opens in any browser. |
 
 Key properties:
 
 - **Stack-agnostic.** A 9-step procedure (identity → routes → components → state → server modules → schema → business logic/auth → env vars → scripts). Framework-specific hints are examples of *where to look*, never requirements — it works for TypeScript, Python, Go, Rust, Java, Ruby, PHP, C#, and full-stack or backend-only projects.
-- **🔒 SECRETS GATE.** `spec.json` and `map.html` are committed/shared artifacts, so the skill forbids copying any literal secret into them — API keys, passwords, tokens, connection strings, and never the values from a real `.env` (names and descriptions only). Hardcoded secrets found in code are logged under `businessLogic.security_notes` with location + purpose, value redacted, flagged *"rotate and move to env"*.
-- **Incremental update mode.** When invoked after a small code change, it patches only the affected `spec.json` keys and bumps `generatedAt` — no re-scan, no `map.html` regeneration. This is what keeps the memory current at near-zero cost.
-- **Validation before finishing.** Rendered card counts are cross-checked against every `spec.json` array (a dropped card or stale tally fails validation), interactivity is verified, and both artifacts are grepped for leaked secret values.
+- **🔒 SECRETS GATE.** `spec.json` and `map.html` are committed/shared artifacts, so the skill forbids copying any literal secret into them — API keys, passwords, tokens, connection strings, and never the values from a real `.env` (names and descriptions only). Hardcoded secrets found in code are logged under `businessLogic.security_notes` with location + purpose, value redacted, flagged *"rotate and move to env"*. Both files must stay in sync — a secret redacted in one must be redacted in the other in the same change.
+- **Incremental update mode.** When invoked after a small code change, it patches only the affected `spec.json` keys and bumps `generatedAt` — no re-scan, no `map.html` regeneration (exception: security redaction that affects `map.html` applies to both files in the same change). This is what keeps the memory current at near-zero cost.
+- **Validation before finishing.** Rendered card counts are cross-checked with `grep` against every `spec.json` array (a dropped card or stale tally fails validation), interactivity is verified (hover traces, click inspector, Escape/✕ close), and both artifacts are grepped for leaked secret values and unescaped HTML.
+
+## Skill 3 — `owiki`: vault knowledge layer
+
+Converts project documentation — PDFs, Word/Excel/PowerPoint, HTML, images, plain text — from a vault's `RAW/` folder into clean Obsidian markdown in `WIKI/`, then enriches each note so coding agents get domain knowledge that no codebase scan can recover.
+
+| Phase | What happens |
+|---|---|
+| 📖 **Extraction** | `scripts/owiki_convert.py` parses each RAW file with format-specific libraries (PyMuPDF, python-docx, openpyxl, BeautifulSoup, etc.), outputs notes with YAML frontmatter, extracts figures into `WIKI/assets/`, and writes a categorized `_Index.md`. Incremental via SHA-256+size cache; WIKI always mirrors RAW (orphans cleaned up). |
+| ✨ **Enrichment** | The agent replaces mechanical first-line summaries with factual 2–3 sentence summaries, filename-derived tags with semantic tags, cleans body structure (merging content across PDF page breaks, verifying heading hierarchy), and writes semantic figure descriptions using whatever image-viewing capability its environment provides. |
+| 🖼️ **Figure handling** | PDF raster images (deduped, >200px) + vector-drawing pages (rendered 150 DPI) + standalone images → `WIKI/assets/`. Each gets a mechanical caption that the agent replaces with a semantic description. Text-only agents mark `<!-- caption-pending -->` for a later vision-capable run to complete — the cache preserves all enrichment for unchanged files. |
+
+Key properties:
+
+- **Agent-agnostic.** No vault, OS, or agent is hardcoded. Vault resolution via `--vault` flag, `OWIKI_VAULT_PATH` env var, `vault-config.json`, or a setup wizard.
+- **`KNOWLEDGE.md` + `AGENTS.md`** — written to the project root (not the vault) on named-form runs. `KNOWLEDGE.md` indexes the WIKI output; `AGENTS.md` gets an idempotent `## Domain Knowledge` section. `--update` re-syncs both without vault config.
+- **Cross-run collaboration.** A text-only agent enriches summaries, tags, and body cleanup; marks figure captions `<!-- caption-pending -->`. A later vision-capable agent finds the markers, views the images, and completes the descriptions — all without re-running the converter (cache skips unchanged files).
+
+### How owiki fits the loop
+
+`app-map` captures what the *code* is; `owiki` captures what the *domain* is. A spec sheet PDF, an API contract doc, or a business requirements document in RAW/ becomes structured markdown that `coding-standard`'s planning step can reference alongside `spec.json` — so the agent knows not just where the code lives, but *why* it works that way. `owiki` runs on demand (new docs arrive, docs change) and its output persists on disk alongside `spec.json` and `todo.md` as part of the session-restoring memory prefix.
 
 ## What this repo is not
 
@@ -108,7 +142,8 @@ Models attend poorly to information buried mid-context — early instructions ge
 Output quality degrades as context fills, even within the model's nominal window.
 
 **Mitigations:**
-- Makes **one-session-per-task** viable and cheap (see [Token economics](#-token-economics)): `app-map`'s `spec.json` plus `todo.md` summaries restore full project awareness in a few thousand tokens.
+- Makes **one-session-per-task** viable and cheap (see [Token economics](#-token-economics)): `app-map`'s
+  `spec.json` plus `todo.md` summaries plus `owiki`'s WIKI notes restore full project awareness in a few thousand tokens.
 - Memory is **bounded by design**: at most 3 summary blocks in `todo.md`; completed checklists are deleted after summarization. Working context stays small indefinitely.
 
 ### 3. Premature & unauthorized writes
@@ -123,7 +158,7 @@ Agents "helpfully" start coding mid-plan, expand scope, or delete files that "lo
 **Mitigation:** every violated constraint — even self-caught — is logged as a permanent `⚠ REPEATED: …` line that is never folded away or softened.
 
 ### 5. Redundant codebase rescans
-**Mitigation:** `app-map` produces `spec.json` — the compact index new sessions read instead of re-scanning hundreds of files — and coding-standard's per-task sync check patches it incrementally so it never goes stale.
+**Mitigation:** `app-map` produces `spec.json` — the compact index new sessions read instead of re-scanning hundreds of files — and coding-standard's per-task sync check patches it incrementally so it never goes stale. `owiki` similarly eliminates re-reading raw project documents — the WIKI notes are already extracted, enriched, and on disk.
 
 ### 6. Silent regressions & comment loss
 **Mitigation:** a mandatory `git diff` review after *every* edit scans for deleted comments and contradictions with known constraints — checked against the actual diff, never from memory.
@@ -135,7 +170,7 @@ Agents "helpfully" start coding mid-plan, expand scope, or delete files that "lo
 
 ## Enforcement model — what these can and cannot guarantee
 
-**The gap, stated plainly:** both skills are written in the same medium they try to constrain —
+**The gap, stated plainly:** all three skills are written in the same medium they try to constrain —
 natural-language rules executed by a probabilistic model. The gates are instructions, not
 interlocks. What they buy you is real but specific:
 
@@ -155,7 +190,7 @@ interlocks. What they buy you is real but specific:
    ```json
    { "hooks": { "PreToolUse": [{
        "matcher": "Write|Edit|Delete",
-       "hooks": [{ "type": "command", "command": ".plan/hooks/require-approval.sh" }]
+       "hooks": [{ "type": "command", "command": "plan/hooks/require-approval.sh" }]
    }]}}
    ```
 3. **CI / pre-commit** — script the rituals: fail on deleted comments in touched files, fail on writes outside the plan's file list, fail on empty catch blocks. For app-map output, run a secret scanner (`gitleaks`, `trufflehog`) over `spec.json`/`map.html` as the backstop to the SECRETS GATE.
@@ -177,7 +212,7 @@ of reads/diffs/code on top of a base overhead `P`, total input tokens after `n` 
 ### Illustrative model
 
 *Assumptions (mid-size web project): base overhead `P ≈ 40k` tokens (skills ≈ 12k, `spec.json`
-≈ 4k, `todo.md` summaries ≈ 2k, system/env ≈ 8k, minimal code reads ≈ 14k); each task adds
+≈ 4k, `todo.md` summaries ≈ 2k, `WIKI/` notes ≈ 2k, system/env ≈ 8k, minimal code reads ≈ 12k); each task adds
 `D ≈ 12k`. 10 tasks. Numbers are illustrative — the shape holds for any P/D, and you should
 measure your own.*
 
@@ -187,18 +222,19 @@ measure your own.*
 | **Fresh session per task** | **~520k** (−45%) | ~160k eff. **(−80% vs marathon raw)** | ~200–250k |
 
 ¹ e.g. Anthropic-style caching: stable prefix served at ~10% of input price.
-The skill files + `spec.json` + `todo.md` form a **stable, cache-friendly prefix** — deliberately written to barely change between sessions.
+The skill files + `spec.json` + `todo.md` + WIKI notes form a **stable, cache-friendly prefix** — deliberately written to barely change between sessions.
 ² Cache TTLs (e.g. 5 min) routinely lapse while *you* review code. Marathon sessions then pay full re-read cost per prompt; fresh sessions only ever pay it once per session.
 
 ### What makes fresh sessions cheap
 
 Normally, restarting costs a full codebase rescan (50k+ tokens) — which is why agents marathon.
-**`app-map` removes that cost** — its `spec.json` is the rescan, pre-computed and kept current:
+**`app-map` removes that cost** — its `spec.json` is the rescan, pre-computed and kept current.
+**`owiki` adds domain knowledge** — its WIKI notes give the agent the "why" behind the code:
 
 ```
-Marathon session:   [skills + spec + summaries] + task₁ + task₂ + … + task₁₀  ← resent every prompt
-Fresh session:      [skills + spec + summaries] + one task                     ← constant size
-                          ↑ ~18k tokens restores FULL project memory
+Marathon session:   [skills + spec + wiki + summaries] + task₁ + task₂ + … + task₁₀  ← resent every prompt
+Fresh session:      [skills + spec + wiki + summaries] + one task                      ← constant size
+                          ↑ ~20k tokens restores FULL project memory + domain context
 ```
 
 **Rule of thumb: run `app-map` once, then start a new session per task; say `continue` only to
@@ -210,46 +246,60 @@ context, and the context-rot curve never gets the chance to bend.
 ## How it works — the loop
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌────────────────────┐
-│ 0. Resume   │ ──▶ │ 1. Plan      │ ──▶ │ 2. Wait for literal│
-│ read .plan/ │     │ write todo.md│     │    "ok proceed"    │
-└─────────────┘     └──────────────┘     └─────────┬──────────┘
-                                                   ▼
-┌─────────────┐     ┌──────────────┐     ┌────────────────────┐
-│ 5. spec.json│ ◀── │ 4. Flip [x], │ ◀── │ 3. Implement       │
-│ sync check  │     │ summarize    │     │ diff-check per edit│
-└─────────────┘     └──────────────┘     └────────────────────┘
+┌──────────────┐     ┌──────────────┐     ┌─────────────────────┐
+│ 0. Resume     │ ──▶ │ 1. Plan      │ ──▶ │ 2. Wait for literal │
+│ read .plan/   │     │ write todo.md│     │    "ok proceed"     │
+│ + WIKI/ notes │     │              │     └──────────┬──────────┘
+└──────────────┘     └──────────────┘                ▼
+                                                      │
+┌──────────────┐     ┌──────────────┐     ┌─────────────────────┐
+│ 5. spec.json │ ◀── │ 4. Flip [x], │ ◀── │ 3. Implement        │
+│ sync check    │     │ summarize    │     │ diff-check per edit │
+└──────────────┘     └──────────────┘     └─────────────────────┘
 ```
 
-- **Approval is specified as mechanical.** Only the literal string `ok proceed` unlocks writing. “yes”, “go ahead”, “sounds good” = feedback, never permission.
+- **Approval is specified as mechanical.** Only the literal string `ok proceed` unlocks writing. "yes", "go ahead", "sounds good" = feedback, never permission.
 - **`continue` resumes** an interrupted, already-approved list — and nothing else.
 - **Append-only memory.** Checkbox flips and summaries only; history is never rewritten.
 - **Summary bound:** at most 3 summary blocks — warnings are folded, never discarded.
 - **spec.json stays current** via the per-task sync check + app-map's incremental patch mode.
+- **WIKI/ notes** are produced by owiki on demand and persist on disk — the agent reads them during planning when domain context (specs, API contracts, business rules) is needed.
 
 ## Installation
 
 1. Copy each skill folder into your agent's skills directory (e.g. `.claude/skills/`):
    - `coding-standard/SKILL.md`
    - `app-map/SKILL.md`
+   - `owiki/SKILL.md` + `owiki/scripts/owiki_convert.py`
 2. *(Optional, coding-standard only)* Add stack profiles under `coding-standard/references/` —
-   e.g. `svelte-kit.md` — defining framework idioms, verification commands, autofixer tools,
-   and DB sync conventions. No profile? The skill falls back to generic conventions + your
-   project's existing patterns.
-3. First run: ask the agent to **map the project** (`app-map`) — this creates `.plan/spec.json`
-   and `.plan/map.html`. Add `.plan/` to `.gitignore` if plans shouldn't be committed
+   e.g. `svelte-kit.md`, `django.md`, `rails.md` — defining framework idioms, verification commands,
+   autofixer tools, and DB sync conventions. No matching profile? The skill falls back to generic
+   conventions + your project's existing patterns. The `svelte-coding-standard` variant ships with
+   `svelte-ai-prompts.md`, `drizzle-orm-turso-libsql.md`, and `mongodb-mongoose.md`.
+3. *(Optional, owiki only)* Install Python dependencies:
+   ```
+   pip install beautifulsoup4 markdownify pymupdf python-docx openpyxl python-pptx pillow pyyaml
+   ```
+   LibreOffice is only needed for ODF/legacy formats (.odt .ods .odp .doc .xls .ppt .rtf).
+   Configure the vault path via `--vault` flag, `OWIKI_VAULT_PATH` env var, or the setup wizard (`--init`).
+4. First run: ask the agent to **map the project** (`app-map`) — this creates `plan/spec.json`
+   and `plan/map.html`. Then convert any project docs (`owiki <project>`) — this creates
+   `WIKI/` notes. Add `plan/` to `.gitignore` if plans shouldn't be committed
    (but consider committing `spec.json`/`map.html` — they're designed to be shared, secrets redacted).
-4. *(Recommended)* Add the harness-level enforcement from the [enforcement model](#enforcement-model--what-these-can-and-cannot-guarantee) section.
+5. *(Recommended)* Add the harness-level enforcement from the [enforcement model](#enforcement-model--what-these-can-and-cannot-guarantee) section.
 
 ## Usage
 
 ```
 You:  Map this project
-Agent: <runs app-map → writes .plan/spec.json + .plan/map.html>
+Agent: <runs app-map → writes plan/spec.json + plan/map.html>
+
+You:  Convert the spec docs for this project
+Agent: <runs owiki → writes WIKI/*.md, enriches summaries/tags/figures>
 
 You:  Add CSV export to the invoices page
 Agent: PLAN MODE — plan only, no file-write tools until "ok proceed".
-       <architecture plan + .plan/todo.md written>
+       <architecture plan + plan/todo.md written>
        Review this plan, read codebase, add tasks — do not implement.
 You:  ok proceed          ← the only string that unlocks implementation
 ```
@@ -258,12 +308,16 @@ You:  ok proceed          ← the only string that unlocks implementation
 
 ```
 coding-standard/
-  SKILL.md          # behavior layer: gates, plan mode, memory, verification
-  references/       # optional stack profiles (svelte-kit, django, rails, …)
+  SKILL.md              # behavior layer: gates, plan mode, memory, verification
+  references/           # optional stack profiles (e.g. svelte-ai-prompts, drizzle-orm-turso-libsql, mongodb-mongoose)
 app-map/
-  SKILL.md          # memory layer: 9-step scan → spec.json + map.html
-README.md           # this file
-LICENSE             # MIT
+  SKILL.md              # memory layer: 9-step scan → spec.json + map.html
+owiki/
+  SKILL.md              # knowledge layer: RAW → WIKI markdown + enrichment
+  scripts/
+    owiki_convert.py    # format-specific extraction + incremental cache
+README.md               # this file
+LICENSE                 # MIT
 ```
 
 ## License
