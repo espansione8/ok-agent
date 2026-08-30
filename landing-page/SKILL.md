@@ -11,7 +11,8 @@ Ask the user to provide:
 If any input is missing or vague, ask targeted follow-up questions first. Derive tone of voice, typography and color palette from [SECTOR] and [BRAND NAME] — do not assume preset moods or palettes.
 
 ## STEP 2 — Architecture
-- Component-based layout following atomic design: clearly separated, commented, reusable blocks — atoms (buttons, badges, inputs), molecules (cards, testimonial, form group), organisms (nav, hero, product grid, parallax banner, footer) — with BEM-like class naming.
+- find the top 20 wbesites of the industry/market, analize them an extract the best and successfull ideas and implement into the landing page
+- Component-based layout following atomic design: clearly separated, commented, reusable blocks — atoms (buttons, badges, inputs), molecules (cards, testimonial, form group), organisms (nav, hero, product grid, parallax banner, footer) — with BEM-like class naming. Be very CREATIVE with the design and effects to impress users.
 - Semantic HTML5 (header/nav/main/section/article/footer) with a strict heading hierarchy: exactly one h1, logical h2–h6 nesting.
 - WCAG 2.1 AA: ARIA labels on interactive controls, aria-live for form feedback, skip link, visible focus states, text contrast ≥4.5:1 (≥3:1 for large text and UI components).
 - Separation of concerns inside the file: presentation (CSS), data (one JS data object describing products/testimonials), logic (render + event handlers).
@@ -28,7 +29,7 @@ If any input is missing or vague, ask targeted follow-up questions first. Derive
 - Append a short HTML comment listing recommended server-side settings that cannot be expressed client-side (cache-control, compression, TTFB < 200ms).
 
 ## STEP 4 — WebGL background & parallax (robustness is non-negotiable)
-- Fixed full-screen <canvas> behind the content: animated fragment-shader scene (flowing fbm/noise liquid gradients in the brand palette) plus soft floating particles, subtly reactive to mouse movement.
+- Fixed full-screen <canvas> behind the content and/or 3d objects related to the content. Example not mandatory: animated fragment-shader scene (flowing fbm/noise liquid gradients in the brand palette) plus soft floating particles, subtly reactive to mouse movement
 - Parallax system: scroll-driven [data-speed] transforms smoothed with lerp in the rAF loop; mouse-driven [data-depth] on floating hero cards; one full-bleed banner whose background image translates slower than scroll; IntersectionObserver-driven scroll reveals.
 - Robustness rules:
   * Validate shader compile and program link status; on ANY failure disable WebGL and fall back to a static themed CSS background. The page must never render a broken or empty visual state.

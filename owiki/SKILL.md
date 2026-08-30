@@ -1,7 +1,7 @@
 ---
 name: owiki
-description: "Convert vault RAW files to WIKI markdown for coding agents."
-version: 4.3.0
+description: "Convert vault RAW files (pdf, docx, html, txt, ...) into English WIKI markdown for coding agents. Use for /owiki, 'convert raw to wiki', new files in a project's RAW/, or refreshing stale KNOWLEDGE.md/AGENTS.md."
+version: 4.4.0
 author: espan
 license: MIT
 platforms: [linux, macos, windows]
@@ -12,6 +12,8 @@ tags: [Obsidian, vault, markdown, conversion, wiki]
 
 Converts `<vault>/<project>/RAW/` files into Obsidian markdown in
 `<vault>/<project>/WIKI/` as project knowledge for coding agents.
+WIKI content is **English**: the converter extracts mechanically, the
+agent translates and enriches (see Enrichment).
 
 Script: `scripts/owiki_convert.py`, next to this file — resolve paths
 relative to it. No vault, OS, or agent is hardcoded anywhere.
@@ -22,8 +24,11 @@ other projects.
 
 The converter extracts text and figures and writes complete mechanical
 notes. The agent running this skill then **enriches** those notes —
-summaries, tags, body structure, figure descriptions — using whatever
-capabilities its environment provides. See the Enrichment section below.
+translates them into English, then summaries, tags, body structure,
+figure descriptions — using whatever capabilities its environment
+provides. The converter never translates: no translation service,
+model, or API key is involved anywhere. See the Enrichment section
+below.
 
 ## When to Use
 - `/owiki <project>` or "convert raw to wiki for <project>"
@@ -31,7 +36,8 @@ capabilities its environment provides. See the Enrichment section below.
 - `/owiki` from vault root (all subfolders) or inside one (just it)
 - `/owiki --all` from anywhere
 - stale repo KNOWLEDGE.md/AGENTS.md → `/owiki --update` from the repo
-- after conversion, enrich the generated WIKI notes (see Enrichment)
+- after conversion, enrich the generated WIKI notes and translate them
+  into English (see Enrichment)
 
 ## Prerequisites
 `pip install beautifulsoup4 markdownify pymupdf python-docx openpyxl python-pptx pillow pyyaml`
@@ -127,15 +133,44 @@ converter finishes. This is the workflow:
 
 For each note in `WIKI/` (read the `.md` file and its YAML frontmatter):
 
-1. **Summary** — replace the mechanical `summary:` in frontmatter
-   (first-line scrape) with a 2-3 sentence factual summary based on the
-   note body content.
+1. **Translation to English** — if the note body is not entirely in
+   English, translate it first, so summary, tags, and captions written
+   afterwards are English too. Rules:
 
-2. **Tags** — replace the filename word-split `tags:` in frontmatter
-   with semantic tags that reflect what the document is about, based on
-   the note body content.
+   - translate prose, headings, and table header/label text
+   - keep verbatim, untranslated: code blocks, commands, file paths,
+     URLs, identifiers, error strings, and data values (part numbers,
+     pin names, model codes). Keep `![[...]]` embeds, `assets/` names,
+     and `<!-- page N -->` markers exactly as they are
+   - never rename the note file: the slug maps to the RAW filename in
+     the cache and in every `[[wikilink]]`. Translate the `title:`
+     frontmatter instead — the original title stays in `aliases:`
+   - when done, add `language: en` to the frontmatter, plus
+     `source-language: <ISO 639-1 code>` when the source was not
+     English. A note without `language: en` is a note the agent has
+     not enriched yet — that is the pending-work signal
 
-3. **Body cleanup** (for PDF-sourced notes) — the converter now strips
+   Example frontmatter after translating an Italian source:
+
+   ```
+   ---
+   title: Wiring Diagram
+   aliases: [Schema Collegamento, Schema Collegamento.pdf]
+   language: en
+   source-language: it
+   ...
+   ---
+   ```
+
+2. **Summary** — replace the mechanical `summary:` in frontmatter
+   (first-line scrape) with a 2-3 sentence factual summary **in
+   English**, based on the note body content.
+
+3. **Tags** — replace the filename word-split `tags:` in frontmatter
+   with semantic tags **in English** that reflect what the document is
+   about, based on the note body content.
+
+4. **Body cleanup** (for PDF-sourced notes) — the converter now strips
    repeated page headers/footers, uses HTML comments (`<!-- page N -->`)
    for page provenance instead of `## Page N` headings, and fences
    code blocks automatically. HTML source `<h1>` tags are demoted to
@@ -145,20 +180,20 @@ For each note in `WIKI/` (read the `.md` file and its YAML frontmatter):
    hierarchy matches the document's actual structure. Do not add new
    content — only reorganize and clean.
 
-4. **Figure descriptions** — for each image listed in the note's
+5. **Figure descriptions** — for each image listed in the note's
    `images:` frontmatter, look at the image file in `WIKI/assets/` and
-   write a semantic description of what it shows: figure type (photo,
-   schematic, diagram, chart, table), every visible label and piece of
-   text verbatim, the layout, and what it represents. Replace the
-   mechanical placeholder caption (the line starting with `>` after the
-   figure heading) with your description.
+   write a semantic description **in English** of what it shows: figure
+   type (photo, schematic, diagram, chart, table), every visible label
+   and piece of text verbatim, the layout, and what it represents.
+   Replace the mechanical placeholder caption (the line starting with
+   `>` after the figure heading) with your description.
 
    Use whatever image-viewing capability your environment provides
    (multimodal model, image analysis tool, vision capability, etc.) to
    look at the image file. If your environment has no way to view
-   images, do not skip the rest of the enrichment — complete summaries,
-   tags, and body cleanup, and mark the caption with a
-   `<!-- caption-pending -->` marker so a later agent with image
+   images, do not skip the rest of the enrichment — complete the
+   translation, summaries, tags, and body cleanup, and mark the caption
+   with a `<!-- caption-pending -->` marker so a later agent with image
    capability can complete it.
 
 ### How caption-pending completion works across runs
@@ -168,14 +203,15 @@ When the RAW source has not changed, the converter skips the file
 entirely and the note is preserved as-is — including your enrichment
 and any `<!-- caption-pending -->` markers.
 
-- A text-only agent enriches summaries, tags, body cleanup, and marks
-  figure captions with `<!-- caption-pending -->`.
+- A text-only agent translates and enriches summaries, tags, body
+  cleanup, and marks figure captions with `<!-- caption-pending -->`.
 - A later agent with image capability runs the converter (all unchanged
   files are skipped — no re-extraction), scans `WIKI/*.md` for
   `<!-- caption-pending -->` markers, views each referenced asset image,
   replaces the mechanical placeholder with a real description, removes
-  the marker, and writes the note back. No re-enrichment of summaries
-  or tags is needed — those are already done and preserved.
+  the marker, and writes the note back. No re-enrichment of
+  translation, summaries, or tags is needed — those are already done
+  and preserved.
 - If a RAW source does change, the converter re-extracts that file and
   overwrites the note with a fresh mechanical version. The agent
   re-enriches from scratch. Other files are untouched.
@@ -204,21 +240,36 @@ stays. The `images:` frontmatter entry stays.
 
 ### Enrichment scope
 
+Check what is left to do before and after working (Git Bash / Linux):
+
+    grep -L "^language: en" WIKI/*.md | grep -v _Index   # notes not yet enriched
+    grep -l "caption-pending" WIKI/*.md                  # notes with pending captions
+
+A note is fully enriched when its frontmatter has `language: en` and
+its body has no `<!-- caption-pending -->` marker.
+
 - Enrich each note independently. Read the note, make improvements,
   write it back.
-- If the converter reports "Skip (unchanged)" for every file and there
-  are no `<!-- caption-pending -->` markers in WIKI/, enrichment is
-  already complete — nothing to do.
+- If both greps come back empty and the converter reported only
+  "Skip (unchanged)", enrichment is already complete — nothing to do.
 - If the converter re-extracted files (source changed), enrich only
   those notes. The converter prints which files were converted.
 - Always check for `<!-- caption-pending -->` markers after the converter
   finishes, even if no files were re-extracted. Complete them if you
   have image capability; leave them if you don't.
 
+### After enrichment: refresh the index
+
+Re-run the converter once after enriching. Unchanged files are skipped
+(no re-extraction, enrichment preserved), but `_Index.md` is rebuilt
+and every note's `## Related` section is refreshed from the enriched
+frontmatter — so index summaries/tags and cross-links match the notes.
+
 ## Notes
-- frontmatter (title, category, summary, tags, source, project,
-  images) is real YAML; manual and agent enrichment preserved for
-  unchanged files
+- frontmatter (title, aliases, category, summary, tags, source, project,
+  converted, images) is real YAML; `language` and `source-language` are
+  added by the agent during enrichment. Manual and agent enrichment
+  preserved for unchanged files
 - tags: significant words pulled from filename + title (no fixed
   vocabulary — works for any project or language); `general` fallback
 - duplicate basenames get `-1`, `-2`... slug suffixes
@@ -228,6 +279,10 @@ stays. The `images:` frontmatter entry stays.
   assets are not removed during cleanup.
 
 ## Pitfalls
+- the converter never translates and cannot detect language — both are
+  agent enrichment. Unchanged notes keep their translation via the
+  cache; a changed source is re-extracted in its original language and
+  must be translated and re-enriched from scratch
 - scanned PDFs return empty text — use OCR or rely on rendered pages
   + captions
 - figure descriptions require the active agent to view the image file.
@@ -260,5 +315,9 @@ stays. The `images:` frontmatter entry stays.
 - enrichment: summaries are factual (not first-line scrapes), tags
   reflect content (not filename words), figure captions describe what
   is visible (when the agent has image-viewing capability)
+- translation: every note except `_Index.md` has `language: en` in
+  frontmatter (`grep -L "^language: en" WIKI/*.md | grep -v _Index`
+  returns nothing); translated notes carry `source-language:`; code
+  blocks, paths, identifiers, and `![[...]]` embeds are untouched
 - `<!-- caption-pending -->` markers: present only when the agent lacks
   image-viewing capability; absent after a run by an agent that has it
