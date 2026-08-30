@@ -1,169 +1,260 @@
----
-name: coding-standards
-description: Language- and framework-agnostic coding standards and agentic workflow — plan/approve/implement gate, todo tracking, and verification steps. Use when writing, reviewing, or modifying code in ANY language, framework, or stack.
+name: universal-code
+description: Language-agnostic coding standards, plus the plan/GOTCHAS.md + plan/TODO.md read/scaffold/update protocol. Use when planning, writing, reviewing, or modifying code in ANY language or framework.
 category: engineering
----
 
-# Universal Coding Standards & Agentic Workflow
+# Universal Coding Standards
 
-Refer to the rules outlined here verbatim when addressing architectural implementation patterns, regardless of language, framework, or platform. Never over-engineer — write the minimal functional solution following strict YAGNI principles, terse and secure, no verbose explanation unless asked.
+Refer to the rules outlined here verbatim when addressing architectural implementation patterns. Never over-engineer - write the minimal functional solution following strict YAGNI principles, terse and secure, no verbose explanation unless asked.
+
+## Stack Detection (first, every project)
+
+Before scanning the codebase or writing anything, detect the stack from project manifests (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `composer.json`, etc.) and record it in `plan/spec.json`: language(s), framework + version, router, state model, ORM/DB, styling system, and the canonical autofix / typecheck / build / test commands. Apply the general rules below plus the detected stack's idiomatic conventions. Never invent idioms for a stack you haven't detected - ask, or consult docs via MCP. Bundled domain references (e.g. `references/svelte-ai-prompts.md`, `references/drizzle-orm-turso-libsql.md`, `references/mongodb-mongoose.md`) are loaded only when they match the detected stack.
 
 ## Loading Rules
 
-Always load this skill before writing or modifying code in any language or stack. Always check `plan/spec.json` and `plan/todo.md` before scanning the codebase or drafting a plan. Always run the project's own linter/formatter/autofixer before sending code, if one is configured (eslint/prettier, ruff/black, gofmt, clippy, rubocop, checkstyle, etc. — whatever the project actually uses). Domain- and stack-specific references (framework docs, ORM/DB conventions, deployment notes) may live under `references/` on a per-project basis — consult whichever apply to the current stack. This skill assumes no particular language, framework, UI library, or database; project-specific choices belong in `plan/spec.json` or the project's own docs, not here.
+- Always load this skill before writing code. Always check `plan/spec.json` and `plan/TODO.md` before scanning the codebase or drafting a plan.
+- Before writing, modifying, or reviewing any code, `plan/GOTCHAS.md` AND `plan/TODO.md` must be read IN FULL and the Plan Files Check line printed (Plan Files Gate below) - no code is written without it.
+- Always run the project's canonical autofix command (from `plan/spec.json`) on changed files before sending code - e.g. `mcp__svelte__svelte_autofixer` (Svelte), `prettier` + `eslint --fix` (JS/TS), `ruff`/`black` (Python), `gofmt` (Go), `rustfmt` + `clippy` (Rust). None configured → say so; don't invent one.
+- Prefer docs MCPs (Context7 or equivalent) for framework/library docs over local `.txt` files.
 
-## 🚫 Hard Gate — plan, approve, then implement
+## Plan Files Gate - read, scaffold, update
 
-Before writing or modifying any code:
+Before writing, modifying, or reviewing any code, read `plan/GOTCHAS.md` AND `plan/TODO.md` IN FULL - re-read in every session/turn, never cached as "already know it". Then print:
 
-1. Read this file in full — every plan item must already reflect these conventions.
-2. Produce the 10-section ARCHITECTURE PLAN below, hyper-atomic tasks each citing the convention(s) they follow.
-3. Write that task list to `plan/todo.md` (Todo Protocol format, every item `- [ ]`) — the only write permitted before approval. One request = one list, always; a revision edits the same pending list in place under the same `T-<n>` ID — it never appends a second list or takes a new ID.
-4. Present the plan as your entire response: the 10 sections, then the full task list, task list MUST be on screen. First line exactly: `PLAN MODE — plan only, no file-write tools until "ok proceed".`
-5. Stop. End your turn.
+Plan files check: plan/GOTCHAS.md + plan/TODO.md read in full → past gotchas known, current/incomplete task list known. YES/NO.
 
-**Approval — a printed check, not a recalled rule.** Before ANY write-tool call (`patch`, `write`, `edit`, `create_file`, `delete_file`, or equivalent), print:
+NO → STOP. Do not write or modify any code until both files are read. A coding turn without a fresh printed check line is ungated - re-read both files and print the line again before continuing.
 
-```
-Approval check: user's last message = "<verbatim, trimmed>" | exact match to "ok proceed" (case-insensitive, standalone)? YES/NO.
-```
+Missing files - if `plan/` doesn't exist, create it. If `plan/GOTCHAS.md` doesn't exist, create it now with just the sentinel block below, then continue with "sentinel only, nothing to review yet" - an empty master list is expected on a first run, not a block:
 
-- **YES** → implement tasks in order from `plan/todo.md`, flipping checkboxes `- [x]` as completed. Do not re-plan.
-- **NO** → the next line must be `→ NOT approved — treating as plan feedback.` No write call follows in that turn, under any framing — "the user seems fine with it," "this is basically approval," and similar reasoning are exactly what this printed check exists to block. Update the same pending list in `plan/todo.md` in place, re-present the full plan, wait again. This mechanism is deliberately mechanical and stack-agnostic: only on printing and acting on a literal string comparison.
-- No other approval signal exists. "yes / go ahead / do it / sounds good / lgtm", questions, revisions, new requests, or `ok proceed` embedded inside other text are all NOT approval.
-- **Exception:** message is exactly `continue` (standalone) and `plan/todo.md` has an unchecked `- [ ]` item in an already-approved list → skip the gate, run the Interrupted-session check below, resume from the next unchecked item. `continue` never approves a new plan.
+Gotchas & Bugs - master list (read first)
 
-**Execution scope lock.** After "ok proceed", touch only files listed in the approved File/folder plan. An unlisted file needs a change? Stop, propose a plan revision, wait for approval again — scope never self-expands.
+`plan/GOTCHAS.md` exists but is unreadable/corrupt → STOP and ask the user how to proceed. If `plan/TODO.md` doesn't exist, create it - no Summary blocks yet (nothing completed), just the current `## Todo List T-<n> - <title> - <YYYY-MM-DD>` section for the work at hand (`T-1` if the project is new, otherwise highest `T-<n>` referenced anywhere in `plan/GOTCHAS.md` or `plan/TODO.md` + 1 - IDs are never reused). Neither missing file is ever a reason to stop and ask.
 
-**Destructive ops — zero assumption.** `delete_file`/rename/move is banned unless that exact path is flagged `DELETE:`/`RENAME:` in the approved plan. Before executing, print: `Destructive op — <path>: authorized by T-<n>.<k>.` A file "looking" unused, dead, or duplicate never authorizes deletion on its own — it may be reached by dynamic imports, reflection, cron jobs, build scripts, or external callers invisible to a static read; comment out or deprecate instead (or the language/tooling's nearest equivalent — e.g. `#[deprecated]`, `@deprecated`, a linter-ignored dead-code marker).
+## File layouts (fixed order, top to bottom)
 
-## Plan Sections (10, required every time)
+`plan/GOTCHAS.md`:
 
-Producing the plan: no code, no file-write tools. Exclude ignored/generated paths (`.gitignore`, build output, vendored dependencies) from codebase reading. One line per fact — not applicable → `N/A.`; empty category → `None.` Never justify an `N/A` or restate what's unchanged; the word already says it. Ask for secrets/config values (env vars, credentials, connection strings) when a task needs them.
+Gotchas & Bugs - master list (read first)
+(ALWAYS) Apply the planning protocol in full - hard gate, plan/TODO.md first, exact "ok proceed" approval, scope lock, destructive-op flags, conventions loaded from this skill.
+(T-<n>) <gotcha, or bug → root cause → fix>
 
-1. **Known constraints** — the sentinel item first, always, then every applicable master-list gotcha from `plan/todo.md`. Nothing else applies → sentinel alone.
-2. **File/folder plan** — `path — purpose (convention: X, Y)`. Files to be deleted/renamed flagged `DELETE: <path>` / `RENAME: <old> → <new>`; flag new server/API endpoints, entry points, or public interfaces.
-3. **Cross-module impact** — search the codebase for key identifiers (field/function/type names) affected by the change, across the whole project, recursively. For each consumer found: does another module/page/service read the same data being changed/removed/renamed? Call the same function or query the same schema? Does a shared interface change affect other callers? One line per inspected file: `file — safe` or `file — affected: <why>`.
-4. **Data flow** — only when writing/validating data: `field → validation → write point`; spots where the same rule is enforced twice; shared schema/type definitions + the one file both sides import or reference. Otherwise `N/A.`
-5. **Verification gates** — `path — lint/format ✓ · type/compile-check ✓` (the second check only when the language/tooling supports static type-checking or compilation and the change is logic-relevant — function signatures, request/response handlers, shared types/interfaces, schema; markup/style/copy-only edits → `type-check —`). Plan a full build/compile only for new dependencies or build-tooling/config changes.
-6. **New dependencies / third-party APIs** — list, flag documentation lookups needed (e.g. via a docs-lookup tool if one is available) to use them correctly. Otherwise `None.`
-7. **Convention compliance checklist** — only rows touching this task: File Path Comment, Component/Module Instructions header, naming conventions for mutation handlers, effect/side-effect hygiene, Server Mutation Pattern, API auth, list-rendering/iteration keys, bound vs. one-way/snapshot values.
-8. **Responsive & cross-platform check** — any UI-facing change: one line on how it's verified across target platforms/screen sizes/environments. Otherwise `N/A.`
-9. **Risks** — client/server (or caller/callee) desync, cross-platform or cross-environment handling. Otherwise `None.`
-10. **Assumptions & open questions** — one number each. A task depending on an unconfirmed assumption is flagged `[needs confirmation]` in the todo list — implementation stops there and asks, never proceeds on an assumption. Otherwise `None.`
+`plan/TODO.md`:
 
-End the reply with exactly: `Review this plan — do not implement yet.`
-
-## Todo Protocol — `plan/todo.md`
-
-Read the whole file before drafting any plan.
-
-**Layout, fixed order top to bottom:**
-```
-### Gotchas & Bugs — master list (read first)
-- (ALWAYS) Apply coding-standards in full — hard gate, plan/todo.md first, exact "ok proceed" approval, scope lock, destructive-op flags.
-- (T-<n>) <gotcha, or bug → root cause → fix>
-### Summary — General (T-1..T-<k>)
-- T-<n> — <one line>
-### Summary — T-<n> — <one line>
-### Summary — T-<n+1> — <one line>
-## Todo List T-<n+2> — <title> — <YYYY-MM-DD>
+Summary - General (T-1..T-<k>)
+<real summary paragraph>
+### Summary - T-<n>
+<real summary paragraph>
+### Summary - T-<n+1>
+<real summary paragraph>
+## Todo List T-<n+2> - <title> - <YYYY-MM-DD>
 Request: <one line>
-- [ ] T-<n+2>.1 — <hyper-atomic task> (convention: <cited convention>)
-```
+- [ ] T-<n+2>.1 - <hyper-atomic task> (convention: <cited convention>)
 
-- **Master list** — every gotcha/bug ever logged lives here, permanently, and only here. The sentinel item is never deleted, folded, or reworded. New entries append on list completion, tagged `(T-<n>)`. A duplicate merges into the existing item as `⚠ REPEATED: violated again in T-<n>, fixed by <fix>` — never a parallel entry. Wording may compress; nothing is ever deleted.
-- **Summaries** — a one-line changelog only, capped at 1 General block + 2 recent individual `### Summary — T-<n>` blocks. Exactly one plain line per entry — never sub-headers, never a "What changed" / "Gotchas / pitfalls" / "Bugs hit & fixes" breakdown. Gotchas and bugs live ONLY in the master list — never restated, even compressed, inside a Summary block. The General block is one bullet per folded `T-<n>`, each a single line — never a per-task write-up. On every completion, state the check regardless of outcome. Over the cap: fold the oldest individual summary into General, e.g. `Summary bound check: 3 individual → folded T-9 into General → now General + T-10, T-11.` Within the cap: still state it, e.g. `Summary bound check: 2 individual (T-11, T-12) → within bound, no fold needed.` A completed list with no stated bound-check result is unenforced.
-- **Append-only after approval** — the only edits permitted on an APPROVED list are: flipping a task's own checkbox, marking a task or (only on explicit user instruction) a whole list `[~]`, appending/merging master-list entries, writing/folding one-line summaries, deleting a just-completed list's checklist after its summary is written, deleting an abandoned list's task lines. Nothing else is ever rewritten.
-- **Lifecycle:** PENDING (draft; every revision edits in place, same `T-<n>`, never a new list) → APPROVED (frozen per the append-only rule above) → COMPLETED or ABANDONED — a list closes exactly these two ways, never a third. On completion (every item `[x]`): harvest new gotchas to the master list, append the one-line summary, delete the checklist entirely, enforce the summary cap, bump the project's version number (patch-level, in whatever manifest the project uses — `package.json`, `pyproject.toml`, `Cargo.toml`, a `VERSION` file, etc.) — same turn, before any new request. ABANDONED only on explicit user instruction: mark the header `- [~] List abandoned by user request: <reason>`, delete its task lines, keep the header line. The agent never abandons or supersedes a list on its own initiative — not to tidy up, not to route around a mistake, not because a new request seems more relevant. A blank-placeholder ID with a quietly started new list is the same violation.
-- **Abandoned task** (a single task, not the whole list): mark `- [~] <task> — superseded by T-<n>.<k>: <reason>` — never delete.
-- **IDs** — highest `T-<n>` referenced anywhere in the file + 1 for a new list (start `T-1` if the file is new/empty); never reused. Flip `- [ ]`→`- [x]` the instant a task finishes, same turn, and state it: `Todo update: T-6.3 → [x].` A done task with no flip is not recorded.
-- **Interrupted session** — an unchecked `- [ ]` item found on read: message is exactly `continue` → resume it. A new request instead → mandatory notice first: `Note: T-6 is still incomplete (4/7 done) — say "continue" to resume, or I'll proceed with this new request instead.` Never silently start a second list over an unmentioned incomplete one.
-- **Self-heal on read** (first write of the session, before any plan write): multiple master lists or gotchas scattered outside it → consolidate into one; more than 2 individual summaries → fold to the cap; multiple pending (never-approved) lists for the same request → merge into one under the earliest `T-<n>`, discard the rest (no `[~]` record needed — they were never approved).
+(more than one `## Todo List` block can be present at once - see Concurrent lists below.)
 
-**`plan/spec.json`** — fast index of routes/entry-points, data schema, components/modules, shared state, server/backend libs, auth, business logic, config/env vars. Read it instead of re-scanning the codebase; open named files only when a task needs exact current code. If missing, generate an equivalent **lightweight** scan that writes the same schema. Fall back to a full deep read of the codebase if the map is missing. Patch only the affected entries when a task changes a tracked shape — route, schema, component/module, shared state, server lib, config var, auth rule, or business logic (validation, permission, pricing, or constraint rules count — the test is "tracked-shape change," never "styling vs. logic"). Does NOT apply — no observable difference in anything spec.json tracks: styling/formatting swaps, copy edits, debug logging, purely internal refactors with no new file/behavior. Never regenerate the whole file for a small change. State the result inline for every task, with the actual reason, not a stock phrase.
+Master list (`plan/GOTCHAS.md`) - every gotcha/bug ever logged lives here, permanently, and only here. The sentinel item is never deleted, folded, or reworded. A duplicate merges into the existing item as `⚠ REPEATED: violated again in T-<n>, fixed by <fix>` - never a parallel entry. Wording may compress; nothing is ever deleted.
+
+Live gotcha capture - the moment a gotcha or bug is hit and fixed during implementation (mid-task, at any point after approval, not just at list completion), append it to `plan/GOTCHAS.md`'s master list immediately, same turn, tagged `(T-<n>)`. State it when it happens: `Gotcha logged: T-<n> → <one line>.` A gotcha discovered and fixed but not logged the same turn is not recorded, and a later task - or a future list - can repeat it.
+
+Todo flips - flip `- [ ]` → `- [x]` the instant a task finishes, same turn, and state it: `Todo update: T-6.3 → [x].` A done task with no flip is not recorded. IDs: highest `T-<n>` referenced anywhere in `plan/GOTCHAS.md` or `plan/TODO.md` + 1 for a new list (start `T-1` if both files are new/empty); never reused.
+
+Append-only after approval - the only edits permitted on an APPROVED list are: flipping a task's own checkbox, marking a task or (only on explicit user instruction) a whole list `[~]`, appending/merging entries into `plan/GOTCHAS.md`'s master list, writing/folding summary paragraphs in `plan/TODO.md`, deleting a just-completed list's checklist (in `plan/TODO.md`) after its summary is written, deleting an abandoned list's task lines. Nothing else is ever rewritten in either file.
+
+Summaries (`plan/TODO.md`) - capped at 1 General block + 2 recent individual `### Summary - T-<n>` blocks. Each block is a real summary, not a one-line changelog and never a per-task write-up: a short paragraph (2-5 sentences, prose) that explains what was actually built or changed and why, the way you'd brief a teammate who missed the work - never "T-9.1 did X, T-9.2 did Y." Never sub-headers, never a "What changed / Gotchas / pitfalls" breakdown. Gotchas and bugs live ONLY in `plan/GOTCHAS.md`'s master list - never restated, even compressed, inside a Summary block. The General block is one real summary of the most important changes across T-1..T-<k> - never a per-task write-up. On every completion, state the check regardless of outcome. Over the cap: fold the oldest individual summary into General by rewriting General as one coherent paragraph that absorbs it - never by appending the old text underneath - e.g. `Summary bound check: 3 individual → folded T-9 into General → now General + T-10, T-11.` Within the cap: still state it, e.g. `Summary bound check: 2 individual (T-11, T-12) → within bound, no fold needed.` A completed list with no stated bound-check result is unenforced. The live Todo List block stays at the bottom of `plan/TODO.md`, beneath the summaries, for as long as it is PENDING or APPROVED-but-incomplete.
+
+Lifecycle: PENDING → APPROVED (frozen per the append-only rule above) → COMPLETED or ABANDONED - a list closes exactly these two ways, never a third. On completion (every item `[x]`): confirm every gotcha hit during the list is already in `plan/GOTCHAS.md`'s master list per Live gotcha capture - log any straggler now - append the summary paragraph to `plan/TODO.md`, delete the checklist entirely, enforce the summary cap, bump the project version (patch) per project convention (e.g. `package.json` version) - same turn, before any new request. ABANDONED only on explicit user instruction: mark the header `- [~] List abandoned by user request: <reason>`, delete its task lines, keep the header line. The agent never abandons or supersedes a list on its own initiative - not to tidy up, not to route around a mistake, not because a new request seems more relevant.
+
+Abandoned task (a single task, not the whole list): mark `- [~] <task> - superseded by T-<n>.<k>: <reason>` - never delete.
+
+Interrupted session - an unchecked `- [ ]` item found in `plan/TODO.md` on read: message is exactly `continue` (standalone) → resume from the next unchecked item. A new request instead → mandatory notice first: `Note: T-6 is still incomplete (4/7 done) - say "continue" to resume, or I'll proceed with this new request instead.` Never silently start new work over an unmentioned incomplete list - if the user proceeds with the new request, the old list is left in place per Concurrent lists, never deleted or marked abandoned on the agent's own initiative.
+
+Concurrent lists - if the user proceeds with a new request instead of resuming the incomplete one, the old list is NOT touched, deleted, or silently abandoned - it stays exactly as it is (still APPROVED, whatever boxes are already checked) in `plan/TODO.md`, and the new list is appended as its own `## Todo List T-<n>` block below it. Each keeps its own heading, `Request:` line, and checkboxes, and each is completed/abandoned independently. State it when it happens: `T-6 left in place (4/7 done, paused) - drafting T-9 alongside it.` If more than one incomplete list exists, bare `continue` is ambiguous - list each incomplete `T-<n>` with its done/total count and ask which one, unless the message already names one (e.g. `continue T-6`).
+
+Size management - `plan/GOTCHAS.md` has no entry cap and nothing is ever deleted, but it's read in full before every coding session, so unchecked growth eventually makes that read slow and expensive. Once the file gets big (roughly 40-50 entries): consolidate first - merge near-duplicate gotchas into one entry, tighten wording, collapse long `⚠ REPEATED` chains down to their current fix - state it: `Gotchas size check: consolidated <n> entries → <m>.` If consolidation alone doesn't bring it back to a comfortable size, archive: move entries tied to areas the current codebase no longer touches (a removed integration, a deprecated route) into `plan/GOTCHAS-ARCHIVE.md`, leaving a one-line pointer in the master list - `- (ARCHIVED, see plan/GOTCHAS-ARCHIVE.md) <area> - <n> entries.` `plan/GOTCHAS-ARCHIVE.md` is NOT part of the mandatory every-code read - read it only when the current work touches an archived area, or the user asks. Archiving is never deleting: every entry that leaves the master list is still findable, in full, in the archive file.
+
+Self-heal on read (first write of the session, before any code edit): multiple master lists or gotchas scattered outside `plan/GOTCHAS.md` → consolidate into one there; more than 2 individual summaries in `plan/TODO.md` → fold to the cap; multiple pending (never-approved) lists for the same request → merge into one under the earliest `T-<n>`, discard the rest (no `[~]` record needed - they were never approved).
 
 ## Post-Change Verification
 
 Every edit, no exceptions, in order:
 
-1. **Diff check first.** `git diff -- <file>` (or pre/post content diff if not a git repo) — read the actual diff, never rely on memory. Scan every `-` line for a removed comment (in whatever syntax the language uses: `//`, `/* */`, `<!-- -->`, `#`, `--`, `;`, etc.) — any found, restore before moving on. Cross-check `-`/`+` lines against this plan's Known constraints; fix any contradiction in the same tool-call cycle. State: `Diff check — <file>: no comments removed, no known-constraint violations.` A write with no stated result is unverified. Runs on every edit, including markup/config-only — those most often silently drop comments.
-2. Run the project's linter/formatter/autofixer on every modified file — cheap, single-file, always, whatever the project provides (eslint/prettier, ruff/black, gofmt, clippy, rubocop, checkstyle, swiftlint, etc.).
-3. Run the project's type-checker or compiler in check-only mode only when type-relevant: function/method logic, signatures, request/response handlers, a shared type/interface, or a schema. Skip for markup/style/copy-only edits. Batch it across several small type-relevant tasks rather than running it after each one, unless a task touches a shared type/schema and needs an isolated check first.
-4. Run the full build and/or test suite only for new dependencies or build-tooling/config changes — never routinely.
-5. Confirm zero NEW errors or warnings (pre-existing ones are acceptable but must be called out).
-6. Update `plan/spec.json` in the same turn a task's checkbox flips, per the rule above.
+1. Diff check first. `git diff -- <file>` (or pre/post content diff if not a git repo) - read the actual diff, never rely on memory. Scan every `-` line for a removed comment in the file's comment syntax (`//`, `/* */`, `<!-- -->`, `#`, `--`, etc.) - any found, restore before moving on. Cross-check `-` / `+` lines against this plan's Known constraints; fix any contradiction in the same tool-call cycle. State: `Diff check - <file>: no comments removed, no known-constraint violations.` A write with no stated result is unverified. Runs on every edit, including markup/copy-only - those most often silently drop comments.
+2. The project's canonical autofixer/linter (per `plan/spec.json`) on every modified source file - cheap, single-file, always. Svelte: `mcp__svelte__svelte_autofixer`; JS/TS: configured formatter + `eslint --fix`; Python: `ruff`/`black`; Go: `gofmt`; Rust: `rustfmt`.
+3. Typecheck / static analysis only when type-relevant: script logic/props/events, server handlers, a shared type, or a DB schema. Command per stack (`npm run check`, `tsc --noEmit`, `mypy`, `cargo clippy`, `go vet`, ...). Skip for markup/class/copy-only edits. Batch it across several small type-relevant tasks rather than running it after each one, unless a task touches a shared type/schema and needs an isolated check first.
+4. The project build only for new dependencies or build-config/adapter changes - never routinely.
+5. Confirm zero NEW errors (pre-existing ones are acceptable but must be called out).
+6. Update `plan/spec.json` in the same turn a task's checkbox flips, per the rule above. That same turn, per the Plan Files Gate: flip the completed task's checkbox in `plan/TODO.md` (`Todo update: T-<n>.<k> → [x].`) and append any just-fixed gotcha/bug to `plan/GOTCHAS.md` (`Gotcha logged: T-<n> → <one line>.`) - neither is deferred to end-of-session or list completion.
+7. Runtime-only failures pass static checks. Typecheckers/linters catch neither immutable-binding reassignment, initialization-order errors (TDZ/hoisting), nor a feature whose only UI entry point never actually runs - after any non-trivial change, boot the app and click through the affected page/flow before calling it verified.
 
 ## Key Rules
 
-- **Comments are permanent** — never delete one, including dormant commented-out code kept for future forks; checked mechanically via the diff step, never by memory. One that's factually wrong after a change still needs explicit user confirmation before removal or update, stated openly — never removed or updated silently.
-- **Files are permanent by default** — same logic: never delete/rename/move because something "looks" unused, duplicate, dead, or legacy. Deletion requires an explicit `DELETE:` entry in the approved plan plus the inline authorization statement (Hard Gate → Destructive ops). When in doubt, comment out or deprecate.
-- Prefer an up-to-date documentation-lookup tool (e.g. a docs/context MCP server) for third-party library/framework docs over stale local text files, whenever such a tool is available.
-- Use the project's already-established reactivity/state-management pattern consistently — don't introduce a second, competing state-management approach alongside an existing one without a documented reason.
-- No global mutable state in server-side/request-handling code — server state must be stateless per request, or one client's data can leak into another's response. Exception: large read-only reference data shared by everyone (e.g. countries, static lookups).
-- Editable form fields/inputs seeded from server-provided data must stay bound to live reactive/controlled state, never a one-way/uncontrolled snapshot — many frameworks reset uncontrolled fields to their initial/default value on re-render or form reset, so a one-way value silently reverts to stale data even after a refetch. Use the framework's two-way-binding or controlled-component pattern (`bind:value` in Svelte, controlled `value`+`onChange` in React, `v-model` in Vue, etc.). A static one-way value is fine only for genuinely display-only, non-editable content.
-- Every loop/iteration rendering a dynamic or mutable collection needs a unique, stable key per item — not array index — whatever the framework's mechanism (`key` in React, `:key` in Vue, `(expression)` in Svelte's `{#each}`, `trackBy` in Angular, etc.). Index-based or missing keys cause UI state bugs on reorder/insert/delete. Omit the key only for fully static, hardcoded lists.
-- One centralized submit/mutation handler per page/view manages ALL form or request submissions for that view — loading state, success/error notification, and field reset — never one separate handler per form on the same page; splitting handlers fragments that logic and drifts inconsistent over time.
-- Use one consistent naming convention for create/mutation actions across the codebase (e.g. a `new*` or `create*` prefix) — pick one and apply it everywhere.
-- Server-side mutation handlers: validate required input, reject with an appropriate error status if missing → wrap the write operation in a try/catch (or the language's equivalent error-handling construct — `Result`/`?` in Rust, `if err != nil` in Go, etc.) → verify the mutation actually landed (rows affected, inserted ID, returned array length) → propagate/sync to any secondary store or cache the project uses → return a consistent success shape; on failure return a consistent error shape with an appropriate status/error code. Skipping the post-write verification step is how silent data-loss bugs happen.
-- API/RPC endpoints reachable by cron, webhooks, or third-party callbacks must check a shared secret or equivalent auth mechanism via header, query param, signed payload, etc. — reject as unauthorized on mismatch, in whatever form the framework's HTTP/RPC layer expects. Never leave an externally-triggered endpoint open.
-- Reuse the project's existing shared utility modules before writing a new helper; multi-use utilities are a single shared export, never redefined inline or duplicated across files.
-- **File Path Comment** at the top of every source file, stating its own relative path in the comment syntax appropriate to that file type (e.g. `// path/to/file.ts`, `# path/to/file.py`, `<!-- path/to/file.html -->`, `-- path/to/file.sql`). Also add a short **Component/Module Instructions** comment block above any shared/reusable component or module definition (usage, auth requirements, non-obvious assumptions) — so a future agent or human can orient without reading the whole implementation.
-- Data-layer queries and secured external fetches happen only in server-side/backend code, never in client-side/frontend code — keeps credentials and query logic out of the client bundle. Applies regardless of framework (SvelteKit `+page.server.ts`, Next.js API routes/Server Components, Django views, Express routes, Rails controllers, etc.).
-- No empty error-handling blocks that silently swallow a failure (`catch {}`, an ignored `err`, a discarded `Result`) — always at minimum log or propagate. No leftover citation markers or placeholder tags inside code blocks. Prefer immutable bindings (`const`, `final`, `let` without reassignment, etc.) wherever the language supports them, for both function/variable definitions and exports. Redact secrets as `[REDACTED]`, never inline.
-- Any `<form>` (or equivalent submission element) containing a file input or a drag-and-drop upload component needs `enctype="multipart/form-data"` — without it the form still submits with no error, but the file is silently missing from the server-side request body/form-data parse.
-- Fence code blocks with the syntax highlighting that matches the actual language inside the block — e.g. a template file's embedded script block should be fenced as `typescript`/`javascript`, not the outer template language, when the two differ.
+### Permanence
 
-## Client/UI-Layer Conventions
+- Comments are permanent - never delete one, including dormant commented-out boilerplate kept for future forks; checked mechanically via the diff step, never by memory. One that's factually wrong after a change can be updated but removal still needs explicit user confirmation, stated openly - never removed silently.
+- Files are permanent by default - same logic: never delete/rename/move because something "looks" unused, duplicate, dead, or legacy. Deletion requires an explicit `DELETE:` entry in the approved plan plus the inline authorization statement (Hard Gate → Destructive ops). When in doubt, comment out or deprecate.
 
-These apply to whichever presentation layer the project uses (web frontend, mobile UI, desktop UI, CLI, etc.) — adapt the concrete syntax to the actual framework; the principles hold across all of them.
+### Reactivity & state
 
-**Import/dependency ordering (where the language groups imports at file top):** environment/config → framework/platform primitives → third-party packages → internal/shared modules → icon/asset libraries last. Follow whatever grouping convention the project has already established if it differs.
+- Prefer the language/framework's current recommended idiom over legacy patterns (Svelte 5 runes over `svelte/store`, React hooks over class components, modern typed Python over untyped) - detected per `plan/spec.json`, never invented.
+- Declaration semantics matter: know what can be rebound vs mutated in the target language. E.g. Svelte 5 `const x = $state(...)` can be mutated but never rebound - reassignment (`x = new Set(...)`, `x = {}`) needs `let x = $state(...)` or the runtime throws `Cannot assign to constant`.
+- No process-wide mutable state in server request paths - server state must be stateless per-request, or one client's data can leak into another's response. Exception: large read-only reference data shared by everyone (countries, cities, names).
+- Favor derived/computed values over effects/watchers. Usually exactly one effect/watcher per component - multiple only when combining would cause dependency interference. Every effect sits at the bottom of the component's logic block, below the submit handler if one exists. Never mutate a stored/source value just to reformat it for display (e.g. a price-mode toggle) - recompute the display inside a derived and leave the source alone, or repeated round-trips drift.
 
-**Page/view structure:** set page-level metadata (title, description) where the platform supports it; if the project targets environments where the runtime may be unavailable, provide a graceful fallback (e.g. a no-script notice for web) directly above the main content.
+### Forms & inputs (web)
 
-**Modal/dialog state:** manage a single `{ type, target, open }`-style state trio per page/view rather than one boolean flag per modal instance — an ever-growing pile of independent booleans doesn't scale and drifts out of sync. Pseudocode:
+- Two-way binding for editable inputs seeded from server load data - never one-way value binding. Progressive-enhancement form handlers (e.g. `use:enhance`) reset fields to `defaultValue` (baked at first render) on success; one-way bindings never update that baseline, so fields silently revert to stale data even after invalidation. One-way/display binding is fine for genuinely display-only content.
+- Every iteration over a dynamic/mutable collection needs a unique stable key (Svelte `(item.id)`, React `key={item.id}`, Vue `:key`) - index keys cause DOM state bugs on reorder/delete. Omit the key only for fully static, hardcoded collections.
+- When filtering a collection for display but mutating/removing by index (e.g. `removeLine(index)`), pass the row's stable id instead of the filtered index - indexes drift between the filtered view and the full collection, so it deletes the wrong row.
+- Any `<form>` containing `<input type="file">` or a drag-and-drop upload component needs `enctype="multipart/form-data"` - without it the form still submits with no error, but the file is silently missing from the form data server-side.
+- One submit handler per page handles ALL form submissions and notifications - never separate per-form handlers (`calendarSyncSubmit`, `profileSubmit` - forbidden). Splitting handlers fragments the notification/reset logic and drifts inconsistent over time. Every form wires the same handler reference via the framework's enhancement mechanism (Svelte: `use:enhance={formSubmit}`, never `{formSubmit()}`).
+- One reset function per page resets every form-related state field to its initial value - called before opening a modal/setting new state and from the submit handler's `finally`. Named partial resets (`onResetSearchFields`, `onResetAddressFields`) only when a genuinely independent sub-form needs one, each resetting a complete scoped group - never a shortcut around maintaining the main reset function.
+- Create/mutation endpoints are named consistently with frontend conventions (e.g. `new*` for creates).
+- Framework failure semantics: many frameworks return HTTP 200 with the failure status embedded in the payload - branch on the embedded status, never on the raw HTTP code. Deserialize action results per framework (SvelteKit: `use:enhance`'s callback receives `result` already deserialized; a raw `fetch()` against an action endpoint gets back `devalue`-encoded text - parse it with `deserialize()` / `devalue.parse`).
+
+### Server & data
+
+- Mutation endpoint pattern: fetch/parse request input → validate required fields, `400` if missing → wrap the data op (insert/update/delete) in `try/catch` → verify the mutation actually landed (inserted id, rows-affected, or array length) → replica sync if the project has one (e.g. `syncTurso()` in Drizzle/Turso projects) → return `{ action, success: true, message }`; catch returns `fail(500, { action, success: false, message })`. Skipping the post-write verification step is how silent data-loss bugs happen.
+- Validation is always server-side even when the UI already enforces it (client checks are UX only), and any switch/branch on an enum/variant column must handle every value the DB constraint allows, not just the ones the current UI offers.
+- A delete action whose row has children in other tables needs an explicit cascade in the same action (or `ON DELETE CASCADE`) - otherwise the children are orphaned and accumulate silently.
+- Page/route-level load guards protect reads only - they never run before POST/mutation actions, and never for API-endpoint children. Every action/endpoint re-validates auth/ownership itself; never assume the parent layout already covered it.
+- API routes reachable by cron, webhooks, or third-party callbacks must check a shared secret via header/query param, `401 Unauthorized` on mismatch - an unauthenticated external endpoint is an open door.
+- Any filesystem path assembled from request input (upload/download endpoints) needs component-level sanitization (reject `.` / `..` segments) plus a resolved-path containment check, on every HTTP verb that touches it.
+- Any new session/auth-state-writing action seeds every column a sibling path seeds (e.g. every expiry/tracking field together) - a partially-seeded row makes an unrelated downstream check silently fail.
+- Cloning an existing CRUD route copies its stale success/error messages AND its (missing) ownership guards along with the logic - sweep both on every clone, not just the parts you meant to change.
+- DB queries and secured external fetches happen only in trusted server files (`+page.server.ts` / `+server.ts` in SvelteKit; equivalents elsewhere), never in client-rendered files - keeps credentials and query logic off the client bundle.
+- Any report/listing query filters out soft-deleted/voided rows the same way the write path does, from the first version of the query - if the filter is added later, sweep it into every existing query over that table too.
+- Reuse existing shared utility modules before writing a new helper; multi-use utilities (e.g. `syncTurso()`) are a single shared export, never redefined inline.
+
+### Style & hygiene
+
+- File-path header comment at the top of every source file, stating its own path from the repo root - the comment syntax depends on file type, never mix them up (`//` C-family/`.ts`, `<!-- -->` markup, `#` Python/shell/YAML, `--` SQL/Lua, etc.).
+- An Instructions block (usage, auth requirements, non-obvious assumptions) at the top of every shared component/module, in the file's comment syntax - so a future agent and users can orient.
+- No `try/catch` with an empty `catch`. No `[cite_start]` or citation text inside code blocks. Declare functions/exports with the language's immutable binding form where available (e.g. `const` in JS). Redact secrets as `[REDACTED]`, never inline.
+- Parsing guards: empty/invalid input to parsers (`new Date('')`, `int('')`, `JSON.parse('')`) silently becomes invalid downstream - guard optional fields with a fallback before parsing.
+- UTC date/month defaults (`toISOString().slice(...)` and equivalents) drift near local midnight - always go through the project's canonical local-timezone helper, never raw UTC slicing.
+- When presenting code in chat/docs, mark the markdown fence with the actual language (`typescript`, `python`, `go`, ...) - never a framework name (never `svelte`).
+
+### JS/TS-family pitfalls (apply when the codebase is JS/TS)
+
+- Pushing to a collection before its own later `const` declaration in the same scope is a TDZ `ReferenceError` at runtime that type-checkers miss - hoist declarations above first use.
+- `array.flatMap(async fn)` returns unresolved Promises, not flattened results - use `(await Promise.all(array.map(fn))).flat()`.
+- `as const` on a numeric array makes a readonly tuple that breaks `.includes()` against a wider number type - use `readonly number[]` instead.
+- `!res.ok` doesn't narrow a discriminated union (`{ok:true}|{ok:false,message}`) under non-strict TS - compare explicitly (`res.ok === false`).
+- Svelte parse-error traps: `class:foo/bar={cond}` (directive name containing `/`) fails - use a ternary on `class={...}` instead; `{/* */}` inside an element's attribute list fails - comments go outside the tag; a missing comma between blocks in `export const actions = {...}` breaks the generated proxy - re-check after adding any action.
+
+Other languages: apply the same vigilance for that family's silent-failure modes (nil/None dereference, swallowed errors, timezone drift, mutability traps) and log project-specific ones in `plan/GOTCHAS.md`.
+
+### UI layout gotchas (web)
+
+- Absolutely-positioned dropdown/suggestion lists get clipped inside an `overflow-x-auto` ancestor (e.g. a grid) - use a native `<datalist>` there instead of a custom-positioned picker. A focus-driven dropdown (`:focus-within`, e.g. DaisyUI) needs the trigger blurred on close, or it won't close on a second click.
+
+## Frontend Conventions
+
+Imports order (adapted to the language): env/config → framework core → third-party modules → internal aliases (`$lib` / `@/` / equivalent) → icons/assets last.
+
+Inputs/props declared at the top of the component; derive, don't copy (Svelte 5 example):
+
+```typescript
+let { data } = $props();
+const { getTable, company_id, tree } = $derived(data);
 ```
-state currentModal = ''
-state currentTarget = null
-state isOpen = false
 
-function onOpenModal(type, item):
-    resetFields()
-    currentModal = type
-    currentTarget = item
-    isOpen = true
+Page structure (web): page title in the document head, plus a `<noscript>` fallback directly above the main markup:
+
+```html
+<noscript>
+  <h1 style="font-weight:700; text-align: center;">Please enable Javascript to continue.</h1>
+  <style type="text/css">#main-content { display: none; }</style>
+</noscript>
 ```
-One central `resetFields()` per page restores every form-related field to its initial value — call it both before opening a new modal/edit context and after a successful submission (in the submit handler's cleanup/`finally` step). Named partial resets (e.g. `resetSearchFields`) only when a genuinely independent sub-form needs one, each resetting a complete scoped group — never a shortcut around maintaining the main reset function.
 
-Modals/dialogs render last in the markup/component tree, gated on the current modal-state trio above, using whatever shared modal/dialog component the project already has — keep the same prop shape (open/title/size or equivalent) consistent across every usage, not just the surrounding state variable names.
+Modal state + click handler (shape shown in Svelte 5; adapt to the detected framework):
 
-## Server/Backend-Layer Conventions
+```typescript
+let currentModal = $state('');
+let currentObj: any = $state({});
+let openModal = $state(false);
+let modalTitle = $state('');
+let postAction = $state('?/');
 
-**Server-side handler file structure:** environment/config imports explicitly at the top → constants/helpers/connection setup → then read/query handlers (`load`, `GET`, index actions, etc.) → then all write/mutation handlers grouped at the bottom.
+const onClickModal = async (type: string, item: any) => {
+  onResetFields();
+  currentModal = type;
+  currentObj = item;
+  openModal = true;
+  if (type === 'newAccount') {
+    postAction = `?/newAccount`;
+    modalTitle = `New Account ${accountType}`;
+  }
+  // Add additional modal types here...
+};
+```
 
-**Server Mutation Pattern:** parse/validate the incoming request body → validate required fields, return a 400-equivalent error if missing → wrap the write operation (insert/update/delete) in a try/catch or the language's error-handling equivalent → verify the mutation actually succeeded (inserted ID, affected-row count, etc.), return a 500-equivalent if not → propagate to any secondary store/cache the project uses → return a consistent success payload (e.g. `{ action, success: true, message }`); on failure return a consistent error payload with an appropriate status code.
+Modals always render last in the markup, wrapped in a conditional on the current modal type, using a shared Modal component whose usage shape (e.g. `isOpen` / `header` / `cssClass` props) stays identical across the whole project.
 
-**API/RPC endpoints** — applies to every endpoint under the project's designated API path and any request-handler file: same import order as above; variables/helpers after imports, before handlers; one handler per HTTP verb/RPC method — if two verbs share identical logic, define one function and reuse it for both; shared-secret or equivalent auth for externally-triggered endpoints, never leave one open; data-layer ops in try/catch (or equivalent), an explicit error response on failure — never a bare/empty response; propagate to secondary stores after successful mutations if the project uses one; return a consistent, predictable response shape (e.g. `{ success, found, sent, failed }`). File Path Comment and Component/Module Instructions apply here too.
+Submit handler - ONE per page handles ALL form submissions and notifications; every server action returns a unique `action` string in the result payload, and custom per-action handling happens inside `if (action === '...')` blocks:
+
+```typescript
+const formSubmit = () => {
+  loading = true;
+  return async ({ result, update }: { result: ActionResult; update: () => Promise<void> }) => {
+    await update();
+    try {
+      if (result.type === 'success' && result.data) {
+        const { action, message } = result.data;
+        if (action === 'filter' || action === 'modify') {
+          notification.success(message);
+        } else {
+          resetActive = false;
+          notification.success(message);
+        }
+      }
+      if (result.type === 'failure' && result.data?.message) notification.error(result.data.message);
+      if (result.type === 'error') notification.error(result.error.message);
+      if (result.type === 'redirect') goto(resolve('/login'));
+    } finally {
+      onResetFields();
+      loading = false;
+    }
+  };
+};
+```
+
+## Backend Conventions
+
+Server file structure: env/config imports explicitly at the top → constants/helpers/client instantiation → then the read handler, then all mutation handlers grouped at the bottom (SvelteKit example):
+
+```typescript
+export const load: PageServerLoad = async ({ params, locals, url }) => { ... }
+export const actions: Actions = { ... }
+```
+
+Mutation handler pattern: fetch/parse request input → validate required fields, `fail(400)` if missing → wrap data ops in `try/catch` → verify the mutation succeeded (inserted id, rows-affected, or array length) → await replica sync if the project has one → return `{ action: 'actionName', success: true, message: 'Success message' }`; catch returns `fail(500, { action: 'actionName', success: false, message: 'Failed to ...' })`.
+
+API endpoints / route handlers - applies to every API file:
+
+- Same import order as above; variables/helpers after imports, before handlers.
+- One function per HTTP verb (`GET`, `POST`, ...) - if two verbs share identical logic, define one function and assign it to both exports.
+- Shared-secret auth for externally-triggered endpoints, never leave one open.
+- Data ops in `try/catch`, proper error response on failure - never a bare response.
+- Await replica sync after successful mutations (if the project uses one).
+- Consistent, predictable JSON shape (e.g. `{ success, found, sent, failed }`).
+- File-path header comment and Instructions block apply here too.
 
 ## Project Structure
 
-Organize the codebase by feature/domain area rather than by file type where the language/framework allows it. If the project uses distinct layout templates or shells (e.g. a dashboard shell, a marketing/public shell, an authenticated-app shell), keep components exclusive to one shell in their own directory, and genuinely shared components in a common shared directory. Keep all API/backend routes under one predictable, discoverable location. Keep local data files and dynamically-generated/user-uploaded files in directories separate from source code and excluded from the build, as the platform requires.
+Routing is filesystem-based and deeply nested in most frameworks - search recursively into child folders, never stop at the routes root. URL grouping (SvelteKit `(groups)`, Next.js route groups, etc.) organizes files without affecting URLs; dynamic params use framework syntax (`[param]`, `$param`, `{param}`). Example: `http://localhost:5173/dashboard/12345` → `/src/routes/(dashboard)/dashboard/[company_id]/+page.svelte` (SvelteKit). Always dig to the paired view file and server/data file. Navigation APIs (`resolve()` / `goto()` and equivalents) don't validate that the target route exists - a typo'd path resolves fine and 404s only at runtime.
 
-If the framework uses folder-based or convention-based routing (SvelteKit, Next.js, Nuxt, Rails, etc.), search recursively into nested/child folders when locating a route or handler — never stop at the routing root. Layout/route groups that don't affect the URL (parenthesized folders, route groups, etc.) still need to be searched into. Always locate the paired handler/data-loading file alongside a given view file if the framework separates them (e.g. a page component and its server-side loader).
+Components persist across navigation between different values of the same dynamic param with no automatic remount - module-level stores/state can leak the previous param's data into the new page; key on the param (`{#key company_id}`, `key={...}`) or re-derive the relevant state inside an effect keyed on the param.
 
-Document the project's actual concrete structure (real paths, real layout names) in `plan/spec.json` or a project README rather than hardcoding assumptions here — this skill deliberately doesn't prescribe a fixed folder layout, since that's stack-specific.
+Component placement by exclusivity: components exclusive to one layout group live in that group's component folder; shared components live in the shared components folder. All API routes live under the API routes root. Local DB files live outside the source tree (e.g. `/data`); dynamic user/app-generated files live in an uploads directory that is NOT compiled into the build output (unlike `/static`).
 
 ## Stack
 
-This skill is intentionally stack-agnostic: it does not prescribe a language, framework, UI library, styling system, or database. Follow whatever the project has already standardized on, and read that standardization from `plan/spec.json`, the project's dependency manifest, and its own docs — never assume a default. When a stack decision is genuinely open (new project, or no existing precedent for this concern), prefer the current well-supported, stable choice appropriate to the task, and record the decision in `plan/spec.json` or the project README so future agents don't reintroduce inconsistency by guessing differently.
+Detect and record in `plan/spec.json` before coding:
 
-## ⛔ FINAL REMINDER — same gate as the top of this file
-
-This is a full restatement — attention to instructions decays over a long conversation and a shorthand reminder at the bottom is exactly what gets silently skipped many turns in. Read all three in full before your very next tool call:
-
-1. Is it a write to a source file (`patch`, `write`, `edit`, `create_file`, `delete_file`, or any file-mutating tool)? If the user's latest message is NOT exactly `ok proceed` (trimmed, case-insensitive, standalone) — STOP. Print the Approval check line first and confirm the answer is genuinely YES before making this call. There is no implicit approval: a follow-up reply, a compliment, a new request, or a message that merely mentions "ok proceed" inside other text is not permission. The one write allowed before approval is `plan/todo.md` itself, during planning.
-2. Is it a write to ANY file NOT listed in the approved plan's File/folder plan? — STOP. Scope never self-expands on its own initiative; propose a plan revision and wait for approval again.
-3. Is it `delete_file` / rename / move? — STOP unless that exact path is flagged `DELETE:` / `RENAME:` in the approved plan AND you state `Destructive op — <path>: authorized by T-<n>.<k>` inline first. Never assume a file is unused, dead, or duplicate — it may be reached by dynamic imports, reflection, cron jobs, or external callers invisible to a static read.
-
-Only exception to (1): a message that is exactly `continue` (standalone) while `plan/todo.md` still has an unchecked `- [ ]` item — for that incomplete list only.
+- UI framework + version and styling system (e.g. DaisyUI + Tailwind where used).
+- Data layer: Turso/SQLite/LibSQL with Drizzle ORM, or MongoDB with Mongoose, or whatever the project uses.
+- State: favor framework-native reactivity primitives (`$state`/`$derived`, hooks, refs) over external store libraries; when genuine cross-component client state is needed, writable stores go in `/src/lib/state.ts`, readable stores in `/src/lib/data.ts` (or the project's equivalent locations).
+- Canonical commands: autofix, typecheck, build, test.
