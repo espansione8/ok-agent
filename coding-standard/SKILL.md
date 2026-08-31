@@ -1,4 +1,4 @@
-name: universal-code
+name: coding-standard
 description: Language-agnostic coding standards, plus the plan/GOTCHAS.md + plan/TODO.md read/scaffold/update protocol. Use when planning, writing, reviewing, or modifying code in ANY language or framework.
 category: engineering
 
