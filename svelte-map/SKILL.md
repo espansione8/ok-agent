@@ -1,6 +1,6 @@
 ---
-name: svelte-app-map
-description: application mapping
+name: svelte-map
+description: application spec mapping
 category: svelte
 ---
 # app-map
@@ -23,16 +23,24 @@ Map any project codebase into a single self-contained `map.html` page and a `spe
 ## Use this skill when
 - The user asks to "map this project", "create an app structure map", "generate project documentation as HTML", or calls this skill
 - Preserving codebase context for a future agent session
-- `plan/spec.json` needs a small patch after a code change → **Incremental update mode** below
+- `.plan/spec.json` needs a small patch after a code change → **Incremental update mode** below
+
+## Bundled assets (shipped with this skill)
+The skill folder contains two files next to this SKILL.md:
+
+- **`spec.json`** — a schema TEMPLATE with one worked example per array. Copy it into the project as `plan/spec.json` (or `.plan/spec.json`), fill in the project own routes/components/tables/env, and set `version` + `generatedAt`. Every `routes[]` entry needs the `terse` field (2–6 word card summary).
+- **`gen-map.mjs`** — the mechanical map generator. Run it from the **project root** with `node /path/to/svelte-app-map/gen-map.mjs`. It reads `plan/spec.json` and writes `plan/map.html`, reusing that file `<style>`/`<script>`/inspector `<aside>` blocks verbatim (on a fresh project it bootstraps those blocks from the HTML template inside this SKILL.md). The masthead `REV` date, mark, lede and per-route card summaries are all derived from `spec.json` — no manual edits in the generated file.
+
+The template below stays the authority for the CSS/JS; `gen-map.mjs` never embeds its own copy.
 
 ## Incremental update mode
-If `plan/spec.json` already exists and this skill is invoked only to reflect a small code change (e.g. called by `svelte-coding-standards` after a todo item changes something `spec.json` tracks):
+If `.plan/spec.json` already exists and this skill is invoked only to reflect a small code change (e.g. called by `svelte-coding-standards` after a todo item changes something `spec.json` tracks):
 - Do **NOT** re-run the 9-step scan or regenerate `map.html`.
 - Read the existing `spec.json`; patch only the keys the change affects (e.g. one `routes[]` entry, one column in `database.tables[]`, one env var).
 - Bump `generatedAt` to today's date.
 - Leave `map.html` untouched unless the user explicitly asks to regenerate the visual map — **EXCEPTION: security fixes. If the patch redacts a secret and `map.html` contains that secret, apply the same redaction to `map.html` in the same change (SECRETS GATE → two files, one fact set).**
 
-Run the full 9-step analysis only when `plan/spec.json` doesn't exist, or the user explicitly asks to re-map the whole project.
+Run the full 9-step analysis only when `.plan/spec.json` doesn't exist, or the user explicitly asks to re-map the whole project.
 
 ## Analysis steps
 Before writing any output, scan the codebase thoroughly — parallel file-picker and code-searcher agents; read key files to understand behavior, not just signatures. Each step feeds a specific part of `spec.json` (mapping listed per step).
@@ -92,7 +100,7 @@ Before writing any output, scan the codebase thoroughly — parallel file-picker
 
 ---
 ## Output files
-After analysis: check for an existing `plan` directory or create it, then produce exactly two files in it.
+After analysis: check for an existing `.plan` or `plan` directory (some projects omit the leading dot) — create it if neither exists, then produce exactly two files in it. The bundled `spec.json` template and `gen-map.mjs` generator are documented under Bundled assets below.
 
 ### 1. `spec.json`
 The **primary deliverable** — the single source of truth a future AI agent loads *instead of* re-scanning the repository. It must be detailed enough that an agent can locate the right file, understand the surrounding logic, and make a correct edit or fix a bug using `spec.json` alone. Every top-level key corresponds to one analysis step — do not skip a key, and do not summarize away specifics (exact file paths, exact column names, exact env var names, exact command strings). One exception to the "exact specifics" rule: secret VALUES are always redacted (SECRETS GATE) — describe where they live, never what they are.
@@ -130,6 +138,7 @@ The **primary deliverable** — the single source of truth a future AI agent loa
 "dotColor": null,
 "tags": ["AUTH", "PUBLIC"],
 "description": "What this route does, in enough detail to debug it without opening the file — key logic, side effects, redirects, validation. NEVER include literal secret values here — redact them and point at the file (SECRETS GATE).",
+"terse": "2–6 word card summary rendered as map.html data-desc (full detail stays in description)",
 "links": [
 { "to": "r-dashboard", "type": "flow", "label": "session ok" }
 ]
@@ -231,18 +240,20 @@ The **primary deliverable** — the single source of truth a future AI agent loa
 - `kind` is `"page"`, `"api"`, or `"external"` (external = infrastructure/3rd-party node like a database or mail provider, not an actual app route).
 - `accent` is one of `public | protected | admin | api | dev | auth | ext` — pick `ext` only for `kind:"external"` nodes.
 - `dotColor` is `null` by default (renders green); set to `"amber"` for redirect-type routes, `"blue"` for `kind:"external"` nodes, `"violet"` for dev/sandbox routes. Leave `null` otherwise.
+- `terse` is a 2–6 word human summary used as the route card's `data-desc`/`.desc` in `map.html`; the long `description` stays in `spec.json` only. Set it on every route — regenerating `map.html` reads this field instead of shortening `description` by hand.
 - `links[].type` is one of `flow | admin | api | util | auth` (must match one of the 5 legend colors) and `label` is a short (1-3 word) phrase or `""`.
 - Every route that is reachable from another route (or that reaches another route) must have that connection captured in `links` — the only source of truth for the wires; nothing is inferred separately in `map.html`.
 
 ### 2. `map.html`
-A single self-contained HTML file. Use the template below — copy its `<style>` block and `<script>` block verbatim (only the `EDGES` array inside `<script>` is project data you replace). Customize the **content** only: masthead text, meta chips, nav labels (rarely needed), the topology zones/cards, and every section's cards/rows.
+A single self-contained HTML file. Use the template below — copy its `<style>` block and `<script>` block verbatim (only the `EDGES` array inside `<script>` is project data you replace). Customize the **content** only: masthead text, meta chips, nav labels (rarely needed), the topology zones/cards, and every section's cards/rows. (The bundled `gen-map.mjs` performs this copy-and-fill mechanically — see Bundled assets.)
 
 **Critical rules for the HTML:**
 - The `<style>` block is **universal** — never change it except to add project-specific CSS classes if you truly need one beyond what's provided.
 - The `<script>` block is **universal** and requires no per-project positioning math: wires are computed automatically at runtime from the real rendered position of each `.rcard` via `getBoundingClientRect()` — you never calculate coordinates by hand. You only supply two things: (1) which `.rcard` elements exist and which row/zone/column they sit in (plain DOM/flexbox layout, no absolute positioning), and (2) the `EDGES` array (built by flattening `routes[].links` from `spec.json` — see the comment above `var EDGES` in the script). The viewport is also drag-to-scroll: when a row overflows the screen, the user can drag the canvas sideways (built into the script — a drag starts only on empty canvas space, so cards keep their hover/click behavior).
 - Section 01's topology is built from `spec.json → topology.zones`, rendered as **two stacked rows inside one canvas**. First, pull every `routes[]` entry with `kind:"api"` out of wherever `topology.zones` lists it. The **top row** (`.topo-row`) renders only the remaining routes: `{"kind":"gate"}` entries as `<div class="gate">` stripes (no cards); `layout:"stack"` zones as `<div class="zone">` (add class `hi` if `"emphasis":true`) with the route cards as **direct children**, ignoring the `columns` sub-array grouping; `layout:"columns"` zones as `<div class="zone dash">` with **one `<div class="col">` per inner array** in `columns`, each containing that array's route cards in order. The **bottom row** renders every extracted `kind:"api"` route as `.rcard acc-api` inside a `<div class="zone dash">` labeled "api rails", grouped into `.col` blocks of up to ~10 cards. Page→API `links` stay in `EDGES` unchanged — hovering a page still traces its wires down into the API row.
 - Every `.rcard` needs: a unique `id` matching a `routes[].id`, the `acc-<accent>` class (or bare class `ext` for `kind:"external"`, which uses the dashed external-node style instead of an `acc-*` class), and `data-route` / `data-method` / `data-file` / `data-desc` / `data-tags` attributes copied from the matching `spec.json` route object — the inspector drawer reads these attributes directly, nothing else to wire up.
-- **Route card descriptions are terse:** `data-desc` / `.desc` holds a 2–6 word summary of what the route does — derived from the `spec.json` description (already redacted — never re-read source files), never the full paragraph, which stays detailed in `spec.json` only. Examples: `/market` → "marketplace for used items", `/dashboard` → "overview of application stats". The CSS clamps `.desc` to 2 lines and cards are 186px wide — if a summary doesn't fit, shorten it, don't widen the card.
+- **Route card descriptions are terse:** `data-desc` / `.desc` holds a 2–6 word summary of what the route does — read it from the route's `terse` field in `spec.json` (already redacted — never re-read source files); if `terse` is missing, fall back to the first ~6 words of `description`. The full paragraph stays detailed in `spec.json` only. Examples: `/market` → "marketplace for used items", `/dashboard` → "overview of application stats". The CSS clamps `.desc` to 2 lines and cards are 186px wide — if a summary doesn't fit, shorten the `terse` value, don't widen the card.
+- The masthead `REV` date must equal `spec.json.generatedAt` — both carry the same "today" stamp. `map.html` may be generated mechanically from `spec.json` (a small script is fine and preferred: copy the template `<style>`/`<script>`/inspector `<aside>` verbatim and rebuild only the body cards + `EDGES`, which guarantees the Section 02–05 completeness greps and exact counts). Never hardcode the REV date or the per-route card summaries.
 - Replace the `EDGES` array with one entry per `routes[].links[]` item, flattened: `[route.id, link.to, link.type, link.label]`.
 - Section 02 (`.grid-c` of `.ccard`) ← `components[]`. Section 03 (`.grid-s` of `.scard`, twice — once for `stores[]`, once for `serverLibs[]`) ← as documented in the template comments, the two usages populate slightly different fields. Section 04 (`.db-board` of `.db-col`/`.tcard` + `.rel`) ← `database.tables[]` / `database.relationships[]`, with `category` mapped to `cat-1`..`cat-7` in first-seen order (8th+ distinct category: omit the `cat-N` class). Section 05 (`.stackrow`, `.cmdgrid`, `.envcard`) ← `stackItems[]`, `scripts.*[]`, `environmentVariables[]` grouped by `required` then by `topic`.
 - The inspector drawer (`<aside class="insp">`) works automatically off the same `data-*` attributes and the `EDGES` array — do not hand-wire it. Its close behavior is the template's single shared `closeInspector()` (✕ button AND Escape both remove `.open` and set `aria-hidden="true"`) — do not split it back into separate handlers.
@@ -1092,7 +1103,7 @@ Once loaded, follow these steps:
 1. **Analyze** the project with the 9-step checklist. Parallel file-pickers/code-searchers; read key files.
 2. **Produce `spec.json`** per the schema — every route (with its `links`), table, column, component, store, server lib, integration, business rule, env var. It must stand alone: another agent reading only `spec.json` can find the right file and make a correct change without re-scanning.
 3. **Produce `map.html`** — copy the CSS and JS blocks verbatim from the template; build Section 01 topology from `spec.json → topology.zones` as the pages row + api row split (plain flexbox rows/zones/columns — no manual coordinate math), with terse 2–6 word card descriptions; flatten `routes[].links` into the `EDGES` array; fill Sections 02–05 straight from the matching `spec.json` arrays per the ADAPT comments — iterating each array in full, one pass, never by eye.
-4. **Validate before finishing — all three checks, mechanically:**
+4. **Validate before finishing — all four checks, mechanically:**
    (a) **Interactivity** — open `map.html` in a browser: topology interactive (hover = trace wires — including page→API wires into the api row — click = inspector drawer, Escape AND the ✕ button both close the drawer — and after EITHER trigger the `<aside class="insp">` carries `aria-hidden="true"`; both share the one `closeInspector()` function), all 5 sections render, every `EDGES` entry references two ids that exist as `.rcard` elements on the page. If a row overflows, the scrollbar appears and mouse-drag on empty canvas space scrolls it.
    (b) **Completeness** — cross-check rendered cards against `spec.json` with grep, never by eye (one match per card):
    - `grep -c 'class="rcard' map.html` == `routes[]` length (pages row + api row + external nodes combined)
@@ -1104,6 +1115,7 @@ Once loaded, follow these steps:
    - `grep -c 'class="stk' map.html` == `stackItems[]` length
    Every printed count (sheetmeta, statrow, sec-sub) must match the arrays exactly. Fix any drift — a card dropped or a stale tally is a failed validation.
    (c) **Secrets + escaping** —
-   - For EVERY literal secret value discovered in the codebase (each one logged in `businessLogic.security_notes`): `grep -F -- '<value>' plan/spec.json plan/map.html` MUST return zero matches — only the redacted wording may remain in either file.
+   - For EVERY literal secret value discovered in the codebase (each one logged in `businessLogic.security_notes`): `grep -F -- '<value>' .plan/spec.json .plan/map.html` MUST return zero matches — only the redacted wording may remain in either file.
    - `grep -nE 'data-(route|method|file|desc|tags)="[^"]*<' map.html` MUST return nothing (no unescaped `<` inside any attribute value).
    - No raw placeholder token (`<folderName>`, `<fileName>`, any `<word>`) may survive in visible card text — check the HTML source, not the rendered page.
+   (d) **Cleanup** — delete every temp file/dir made during scanning or generation (scratch scripts, grep dumps, throwaway copies); kill any node process left running (e.g. a `gen-map.mjs` invocation); `git status` shows only `plan/spec.json` / `plan/map.html` (or the `.plan` equivalents) plus any files the user explicitly asked for — nothing stray.

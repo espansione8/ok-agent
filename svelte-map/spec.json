@@ -1,0 +1,271 @@
+{
+  "project": "slug",
+  "name": "Human-readable name",
+  "description": "One-paragraph description of what the app does and who it is for.",
+  "version": "0.0.1",
+  "generatedAt": "YYYY-MM-DD",
+  "techStack": {
+    "framework": "SvelteKit 2 / Next.js 15 / ...",
+    "runtime": "Svelte 5 runes / React 19 / ...",
+    "styling": "Tailwind CSS 4 + DaisyUI 5 / ...",
+    "database": "Turso (LibSQL) / PostgreSQL / MongoDB / ...",
+    "orm": "Drizzle / Prisma / Mongoose / none",
+    "auth": "custom session cookie / next-auth / better-auth / ...",
+    "adapter": "node / vercel / static / ..."
+  },
+  "stackItems": [
+    {
+      "name": "SvelteKit",
+      "version": "2",
+      "tag": "framework"
+    },
+    {
+      "name": "Svelte",
+      "version": "5",
+      "tag": "runtime"
+    },
+    {
+      "name": "Tailwind CSS",
+      "version": "4",
+      "tag": "styling"
+    },
+    {
+      "name": "Turso LibSQL",
+      "version": "0.15",
+      "tag": "database"
+    },
+    {
+      "name": "Drizzle ORM",
+      "version": "1",
+      "tag": "orm"
+    }
+  ],
+  "routes": [
+    {
+      "id": "r-login",
+      "kind": "page",
+      "path": "/login",
+      "methods": "GET·POST",
+      "file": "src/routes/(login)/login/+page.server.ts",
+      "group": "(login)",
+      "accent": "auth",
+      "dotColor": null,
+      "tags": [
+        "AUTH",
+        "PUBLIC"
+      ],
+      "terse": "email + password login",
+      "description": "What this route does, in enough detail to debug it without opening the file — key logic, side effects, redirects, validation. NEVER include literal secret values here — redact them and point at the file (SECRETS GATE).",
+      "links": [
+        {
+          "to": "r-dashboard",
+          "type": "flow",
+          "label": "session ok"
+        }
+      ]
+    },
+    {
+      "id": "r-dashboard",
+      "kind": "page",
+      "path": "/dashboard",
+      "methods": "GET",
+      "file": "src/routes/(dashboard)/dashboard/+page.server.ts",
+      "group": "(dashboard)",
+      "accent": "protected",
+      "dotColor": null,
+      "tags": [
+        "PROTECTED"
+      ],
+      "terse": "overview of application stats",
+      "description": "Per-user dashboard: overview stats and links into the app.",
+      "links": []
+    },
+    {
+      "id": "r-ext-db",
+      "kind": "external",
+      "path": "EXTERNAL · Database",
+      "methods": "◈",
+      "file": "Provider / connection mode",
+      "group": "external",
+      "accent": "ext",
+      "dotColor": "blue",
+      "tags": [
+        "DATA"
+      ],
+      "terse": "primary database",
+      "description": "Primary database (kind:\"external\" = infrastructure node, not a real route).",
+      "links": []
+    }
+  ],
+  "components": [
+    {
+      "id": "C-01",
+      "name": "Modal.svelte",
+      "file": "src/lib/components/Modal.svelte",
+      "status": "live",
+      "description": "What it renders, its props/events, and where it is used."
+    }
+  ],
+  "stores": [
+    {
+      "file": "src/lib/stores/state.ts",
+      "name": "status",
+      "exports": [
+        "status"
+      ],
+      "description": "What state it holds, who writes to it, who reads it."
+    }
+  ],
+  "serverLibs": [
+    {
+      "id": "S-01",
+      "name": "database.ts",
+      "path": "src/lib/server/libsql/database.ts",
+      "description": "What it sets up / exports and who imports it."
+    }
+  ],
+  "utils": [
+    {
+      "name": "utils",
+      "file": "src/lib/utils.ts",
+      "functions": [
+        "fn1",
+        "fn2"
+      ]
+    }
+  ],
+  "integrations": {
+    "mailer": {
+      "file": "src/lib/server/mailer.ts",
+      "functions": [
+        "sendMail"
+      ],
+      "description": "Nodemailer wrapper — SMTP config from env, used by /api/mailer/* routes."
+    }
+  },
+  "database": {
+    "provider": "Turso (LibSQL)",
+    "orm": "Drizzle",
+    "tables": [
+      {
+        "name": "users",
+        "category": "core",
+        "description": "What this table represents in the domain.",
+        "columns": [
+          {
+            "name": "id",
+            "type": "text",
+            "primaryKey": true,
+            "default": "nanoid(6)"
+          },
+          {
+            "name": "email",
+            "type": "text",
+            "nullable": false
+          },
+          {
+            "name": "settings",
+            "type": "text",
+            "mode": "json",
+            "default": "[]"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "from": "users",
+        "to": "users",
+        "description": "Example relationship description."
+      }
+    ]
+  },
+  "auth": {
+    "provider": "custom session cookie",
+    "methods": [
+      "password"
+    ],
+    "session": "sessionId cookie, validated in hooks.server.ts",
+    "passwordHash": "SHA-256 custom",
+    "guards": [
+      {
+        "scope": "(dashboard) group",
+        "rule": "src/routes/(dashboard)/+layout.server.ts redirects to /login when no valid session"
+      }
+    ]
+  },
+  "businessLogic": {
+    "key_concept": {
+      "rule": "Precise description of the rule, including edge cases and where it is enforced (file/function)."
+    },
+    "security_notes": {
+      "rule": "One entry per hardcoded secret found in the codebase: its location and purpose, value REDACTED, flagged for rotation and externalization."
+    }
+  },
+  "environmentVariables": [
+    {
+      "name": "DATABASE_URL",
+      "required": true,
+      "topic": "core",
+      "description": "Connection string."
+    },
+    {
+      "name": "PUBLIC_GA_ID",
+      "required": false,
+      "topic": "analytics",
+      "description": "GA4 measurement id."
+    }
+  ],
+  "scripts": {
+    "development": [
+      {
+        "cmd": "npm run dev",
+        "description": "vite dev server"
+      }
+    ],
+    "database": [
+      {
+        "cmd": "npm run db:push",
+        "description": "drizzle-kit push"
+      }
+    ],
+    "buildAndTest": [
+      {
+        "cmd": "npm run build",
+        "description": "vite build"
+      }
+    ]
+  },
+  "topology": {
+    "zones": [
+      {
+        "kind": "zone",
+        "layout": "stack",
+        "emphasis": true,
+        "label": "public · login",
+        "columns": [
+          [
+            "r-login"
+          ]
+        ]
+      },
+      {
+        "kind": "gate",
+        "label": "auth gate"
+      },
+      {
+        "kind": "zone",
+        "layout": "columns",
+        "label": "(dashboard) app",
+        "columns": [
+          [
+            "r-dashboard"
+          ],
+          [
+            "r-ext-db"
+          ]
+        ]
+      }
+    ]
+  }
+}

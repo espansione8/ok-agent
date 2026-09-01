@@ -15,17 +15,13 @@ NO → STOP. Do not write or modify any Svelte code until both files are read. A
 
 Missing files - if `plan/` doesn't exist, create it. If `plan/GOTCHAS.md` doesn't exist, create it now with just the sentinel block below, then continue with "sentinel only, nothing to review yet" - an empty master list is expected on a first run, not a block:
 ### Gotchas & Bugs - master list (read first)
-- `plan/GOTCHAS.md` unreadable/corrupt → STOP, ask user how to proceed. A *missing* file (either one) is never itself a reason to stop.
-- Missing `plan/TODO.md` → create it: no Summary blocks yet (nothing completed), just the current `## Todo List T-<n> - <title> - <YYYY-MM-DD>` for the work at hand. ID = `T-1` if new project, else (highest `T-<n>` referenced anywhere in either file) + 1 — IDs never reused.
-- Master list = `plan/GOTCHAS.md`, permanent, sole home for every gotcha/bug ever logged. Sentinel item is never deleted, folded, or reworded — wording may compress, nothing is removed. A duplicate merges into the existing item as `⚠ REPEATED: violated again in T-<n>, fixed by <fix>`, never a parallel entry.
+`plan/GOTCHAS.md` exists but is unreadable/corrupt → STOP and ask the user how to proceed. If `plan/TODO.md` doesn't exist, create it - no Summary blocks yet (nothing completed), just the current `## Todo List T-<n> - <title> - <YYYY-MM-DD>` section for the work at hand (`T-1` if the project is new, otherwise highest `T-<n>` referenced anywhere in `plan/GOTCHAS.md` or `plan/TODO.md` + 1 - IDs are never reused). Neither missing file is ever a reason to stop and ask.
 
 File layouts (fixed order, top to bottom)
-
 `plan/GOTCHAS.md`:
 ### Gotchas & Bugs - master list (read first)
-- (ALWAYS) read plan/GOTCHAS.md and plan/TODO.md.
+- (ALWAYS) Apply svelte-plan in full - hard gate, plan/TODO.md first, exact "ok proceed" approval, scope lock, destructive-op flags, conventions loaded from references/svelte-code.md.
 - (T-<n>) <gotcha, or bug → root cause → fix>
-
 `plan/TODO.md`:
 ### Summary - General (T-1..T-<k>)
 <real summary paragraph>
@@ -36,8 +32,9 @@ File layouts (fixed order, top to bottom)
 ## Todo List T-<n+2> - <title> - <YYYY-MM-DD>
 Request: <one line>
 - [ ] T-<n+2>.1 - <hyper-atomic task> (convention: <cited convention>)
-
 (more than one `## Todo List` block can be present at once - see Concurrent lists below.)
+
+Master list (`plan/GOTCHAS.md`) - every gotcha/bug ever logged lives here, permanently, and only here. The sentinel item is never deleted, folded, or reworded. A duplicate merges into the existing item as `⚠ REPEATED: violated again in T-<n>, fixed by <fix>` - never a parallel entry. Wording may compress; nothing is ever deleted.
 
 Live gotcha capture - the moment a gotcha or bug is hit and fixed during implementation (mid-task, at any point after approval, not just at list completion), append it to `plan/GOTCHAS.md`'s master list immediately, same turn, tagged `(T-<n>)`. State it when it happens: `Gotcha logged: T-<n> → <one line>.` A gotcha discovered and fixed but not logged the same turn is not recorded, and a later task - or a future list - can repeat it.
 
@@ -68,12 +65,10 @@ Diff check first. `git diff -- <file>` (or pre/post content diff if not a git re
 Confirm zero NEW errors (pre-existing ones are acceptable but must be called out).
 Update `plan/spec.json` in the same turn a task's checkbox flips, per the rule above. That same turn, per the Plan Files Gate: flip the completed task's checkbox in `plan/TODO.md` (`Todo update: T-<n>.<k> → [x].`) and append any just-fixed gotcha/bug to `plan/GOTCHAS.md` (`Gotcha logged: T-<n> → <one line>.`) - neither is deferred to end-of-session or list completion.
 Runtime-only failures pass typecheck. `svelte-check`/`npm run check` catch neither const-`$state` rebinds nor SSR-only TDZ (`$derived`/closures reading a var declared later in the file) nor a feature whose only UI entry point never actually runs - after any non-trivial change, boot the dev server and click through the affected page/flow before calling it verified.
-Before finishing: delete every temp file/dir created this session (temp scripts, `.tmp-smoke/`, dumps, caches); kill every node process/dev server started; `git status` must show only the user's own changes.
 
 Key Rules
 Comments are permanent - never delete one, including dormant commented-out boilerplate kept for future forks; checked mechanically via the diff step, never by memory. One that's factually wrong after a change can be updated but removal still needs explicit user confirmation, stated openly - never removed silently.
 Files are permanent by default - same logic: never delete/rename/move because something "looks" unused, duplicate, dead, or legacy. Deletion requires an explicit `DELETE:` entry in the approved plan plus the inline authorization statement (Hard Gate → Destructive ops). When in doubt, comment out or deprecate.
-Bug fixing: never break working functionality. Layout/scroll changes: audit all axes and breakpoints first. Minimal-scope fix over refactor.
 Prefer Context7 MCP for DaisyUI/Tailwind/Drizzle docs over local `.txt` files.
 Svelte 5 Runes (`$state`, `$derived`) over `svelte/store` for reactivity.
 `const x = $state(...)` can be mutated but never rebound - reassignment (`x = new Set(...)`, `x = {}`) needs `let x = $state(...)` or Svelte throws `Cannot assign to constant`.
