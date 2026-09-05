@@ -59,7 +59,13 @@ test('row collapse re-clicks the ROW, never an inner Edit/Delete button', async 
   const report = [];
   await mod.probe(page, (await mod.census(page)).find((e) => e.sel === 'tbody tr'), 0, report);
   assert.ok(report.some((r) => r.result === 'row-expanded'), 'row click yields row-expanded');
-  assert.ok(page._clickLog.filter((c) => c.type === 'mouse-click').length >= 2, 'row clicked to expand AND to collapse — no inner control touched');
+  // v2.9.1: dispatch is element-anchored (handle-click) with a locator-click
+  // collapse — the ROW is clicked twice and NO inner control is ever the
+  // target. The v2.5 regression this guards: collapse used
+  // locator('button').first(), which in an [Edit][Delete] row hits EDIT.
+  const dispatches = page._clickLog.filter((c) => c.type === 'handle-click' || c.type === 'locator-click');
+  assert.ok(dispatches.length >= 2, 'row clicked to expand AND to collapse');
+  assert.ok(!dispatches.some((c) => c.text === 'Edit' || c.text === 'Delete'), 'no inner Edit/Delete control was ever the click target');
 });
 
 test('details expansion recurses into revealed children (census sees them once open)', async () => {

@@ -1,13 +1,14 @@
 {
   "name": "svelte-replay-skill",
-  "version": "2.7.0",
+  "version": "2.9.4",
   "private": true,
   "description": "Self-contained generator of recorded, cursor-visible Playwright replay scripts for SvelteKit apps (see SKILL.md).",
   "type": "module",
   "scripts": {
     "pretest": "node test/extract-embedded.mjs",
     "test": "node --test \"test/*.test.mjs\"",
-    "extract": "node test/extract-embedded.mjs"
+    "extract": "node test/extract-embedded.mjs",
+    "generate": "node scripts/generate.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"

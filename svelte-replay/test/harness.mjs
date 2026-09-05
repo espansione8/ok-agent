@@ -79,8 +79,11 @@ export function makeMockPage(dom, opts = {}) {
     screenshot: async () => {},
     on: () => {},
     _clickLog: clickLog,
+    _dispatchGate: null,
+    _setDispatchGate(fn) { page._dispatchGate = fn; },
   };
   page._clickHook = null;
+  page._optsOnClick = opts.onClick ?? null;   // handle dispatch falls back to the creation-time hook
   return page;
 }
 
@@ -107,7 +110,42 @@ function makeLocator(doc, sel, clickLog, page) {
     fill: async (v) => { const el = doc.querySelector(sel); if (el) el.value = v; },
     getAttribute: async (a) => doc.querySelector(sel)?.getAttribute(a) ?? null,
     textContent: async () => doc.querySelector(sel)?.textContent ?? null,
-    click: async () => { const el = doc.querySelector(sel); if (el) clickLog.push({ type: 'locator-click', text: el.textContent }); },
+    click: async () => {
+      // Real Playwright semantics: locator.click() on a zero-match selector
+      // throws after its actionability wait — it does NOT silently no-op. The
+      // embedded click() relies on this exact throw: the handle.click()
+      // fallback must re-resolve the selector and fail loudly when the tagged
+      // node detached (the throw is probe()'s retry signal).
+      const el = doc.querySelector(sel);
+      if (!el) throw new Error('locator.click: no element matches ' + sel);
+      clickLog.push({ type: 'locator-click', text: el.textContent });
+    },
+    // v2.9.1 element-anchored dispatch: locator.evaluateHandle() wraps the
+    // locator's CURRENT match in a handle; handle.click() must resolve THAT
+    // node at dispatch time — an impostor at the glided coordinates can
+    // never receive the event. Throws when the node detached post-resolution
+    // (real ElementHandle behavior; probe treats it as its retry signal).
+    // _dispatchGate is the test seam for a mid-dispatch detach: it runs at
+    // dispatch time BEFORE the isConnected check, letting a test re-render
+    // the DOM in the "final ms" (the v2.9.3 click() fallback contract).
+    evaluateHandle: async (fn) => {
+      const el = doc.querySelector(sel);
+      if (!el) return null;
+      let detached = false;
+      return {
+        _mockHandle: true,
+        _el: el,
+        _detachCheck() { detached = true; },
+        evaluate: async (f) => f(el),
+        click: async () => {
+          if (page?._dispatchGate) await page._dispatchGate(el);
+          if (detached || !el.isConnected) throw new Error('Element is not attached to the DOM');
+          clickLog.push({ type: 'handle-click', text: el.textContent, id: el.id || null });
+          const hook = page?._clickHook ?? page?._optsOnClick ?? null;
+          if (hook) await hook(el);
+        },
+      };
+    },
     hover: async () => {},
     boundingBox: async () => ({ x: 10, y: 10, width: 100, height: 20 }),
     scrollIntoViewIfNeeded: async () => {},

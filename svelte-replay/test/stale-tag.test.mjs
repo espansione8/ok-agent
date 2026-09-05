@@ -47,6 +47,24 @@ test('v2.8.3: genuinely-removed element returns null (no timeout burn)', async (
   assert.equal(fresh, null, 'gone element must be null so probe records click-failed immediately');
 });
 
+test('v2.9: probe returns batch-abort signal when the element evaporated (unkeyed re-render)', async () => {
+  const dom = makeDom(`<body><button id="filter">Filter</button></body>`);
+  const mod = await loadEmbedded();
+  const page = makeMockPage(dom);
+  const els = await mod.census(page);
+  dom.window.document.querySelector('#filter').remove();
+  const report = [];
+  // v2.9 semantics: evaporation aborts the WHOLE census batch (return
+  // 'navigated' — the caller re-censuses) instead of letting the remaining
+  // stale tags each record a noise click-failed (96 of them on one demo
+  // page in the live full run).
+  const r = await mod.probe(page, els[0], 0, report);
+  assert.equal(r, 'navigated', 'evaporated element must signal batch-abort, not just record and continue');
+  const rec = report.find((x) => (x.result || '').includes('element gone after re-render'));
+  assert.ok(rec, 'evaporation still recorded honestly in the report');
+  assert.ok((rec.result || '').includes('batch-abort'), 'record marks the batch-abort cause');
+});
+
 test('v2.8.3: recovery never steals another element\'s tag', async () => {
   const dom = makeDom(`<!DOCTYPE html><html><body>
     <button id="filter">Filter</button>

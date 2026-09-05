@@ -44,6 +44,7 @@ const embedded = [
 // to main(), not to the helpers under test.
 const preamble = `\
 const NAV_TREE = { '': [{ label: 'Home', href: '/' }], 'Invoices': [{ label: 'All invoices', href: '/invoices' }] };
+const MANIFEST = { params: {} };
 `;
 const transformed = embedded
   .replace("import { chromium } from 'playwright';", 'const chromium = {};')
@@ -57,8 +58,23 @@ writeFileSync(
   out,
   preamble +
   transformed +
-    `\nexport { census, probe, sweepRoute, dedupKey, writeCoverage, visited, routeQueue, DESTRUCTIVE, CLICKABLE, NAV_TREE, MAX_CLICKS, CURSOR_JS, wirePageGuards, backupDatabase, restoreDatabaseBackup, resolveParam, DEEP_SELECTS, EXCLUDES, PARAM_OVERRIDES, navHoverLoc, navLabelRe, P, FAST, BASE_URL, closeModal, fingerprint, resolveFresh };\n`
+    `\nexport { census, probe, sweepRoute, dedupKey, writeCoverage, visited, routeQueue, DESTRUCTIVE, CLICKABLE, NAV_TREE, MAX_CLICKS, CURSOR_JS, wirePageGuards, backupDatabase, restoreDatabaseBackup, resolveParam, DEEP_SELECTS, EXCLUDES, PARAM_OVERRIDES, navHoverLoc, navLabelRe, P, FAST, BASE_URL, closeModal, fingerprint, resolveFresh, toAppUrl, toDocUrl, HASH_ROUTES, click, type, fill, pickSelect, pickSelectContains, teardown };\n`
 );
+
+// Second build with HASH_ROUTES forced true — lets tests exercise the
+// hash-SPA polarity of toAppUrl()/fingerprint() without runtime flag hacks
+// (HASH_ROUTES is a load-time const captured by the helpers' closures).
+const transformedHash = transformed.replace(
+  /const HASH_ROUTES = has\('hash-routes'\);/,
+  'const HASH_ROUTES = true;'
+);
+if (transformedHash === transformed) {
+  console.error('extract-embedded: HASH_ROUTES line not found — hash-variant build skipped; hash tests would silently test the wrong polarity');
+  process.exit(1);
+}
+writeFileSync(join(HERE, '.build', 'embedded-hash.mjs'),
+  preamble + transformedHash +
+  `\nexport { toAppUrl, toDocUrl, fingerprint, HASH_ROUTES, resolveParam };\n`);
 
 // Syntax gate: `node --check` on the emitted .mjs — the exact gate §2 mandates
 // for generated scripts, applied to the extracted code (ESM-aware, unlike

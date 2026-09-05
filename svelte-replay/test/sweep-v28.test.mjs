@@ -21,14 +21,14 @@ test('v2.8: §7 backup is bracketed by stopDevServer → backupDatabase → star
   // Pull the §7 main-plumbing region and verify the ordering there.
   const region = src.slice(src.indexOf('7. main() PLUMBING'), src.indexOf('8. ROBUSTNESS'));
   const stop = region.indexOf('await stopDevServer();');
-  const backup = region.indexOf('const stamp = backupDatabase();');
+  const backup = region.indexOf('const stamp = backupDatabase(dbKind);');
   const start = region.indexOf('await startDevServer();', backup);
   assert.ok(stop !== -1 && backup !== -1 && start !== -1, 'all three calls present in §7');
   assert.ok(stop < backup && backup < start, `backup must run between stop and start (stop@${stop} < backup@${backup} < start@${start})`);
 });
 
 test('v2.8: backupDatabase/restoreDatabaseBackup skip in --no-manage-dev-server mode', () => {
-  const backup = src.match(/function backupDatabase\(\) \{[\s\S]*?\n\}/)[0];
+  const backup = src.match(/function backupDatabase\((dbKind)?\) \{[\s\S]*?\n\}/)[0];
   const restore = src.match(/function restoreDatabaseBackup\(stamp\) \{[\s\S]*?\n\}/)[0];
   for (const [name, fn] of [['backupDatabase', backup], ['restoreDatabaseBackup', restore]]) {
     assert.ok(fn.includes('MANAGE_DEV_SERVER'), `${name} must check MANAGE_DEV_SERVER — it cannot quiesce an externally-owned server`);

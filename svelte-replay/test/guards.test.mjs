@@ -13,12 +13,30 @@ const src = () => readFileSync(EMBEDDED, 'utf8');
 
 test('DESTRUCTIVE is word-boundary anchored (Avoid must not match void)', async () => {
   const { DESTRUCTIVE } = await loadEmbedded();
-  assert.ok(!DESTRUCTIVE.test('Avoid double charge'));
+  // 'Avoid' contains the substring 'void' but with no word boundary — the
+  // v2.5 regression this guards. (v2.9.2 widened the list to include
+  // 'charge', so the old 'Avoid double charge' phrase now legitimately
+  // matches; use a phrase without any destructive word.)
+  assert.ok(!DESTRUCTIVE.test('Avoid double counting'));
   assert.ok(DESTRUCTIVE.test('Delete invoice'));
   assert.ok(DESTRUCTIVE.test('Logout'));
   assert.ok(DESTRUCTIVE.test('Sign out'));
   assert.ok(!DESTRUCTIVE.test('Download report'));
   assert.ok(!DESTRUCTIVE.test('Approve'));
+});
+
+test('v2.9.2: DESTRUCTIVE widened — common SaaS/CRUD destructive verbs are caught', async () => {
+  const { DESTRUCTIVE } = await loadEmbedded();
+  for (const s of ['Cancel plan', 'Clear history', 'Empty trash', 'Refund invoice',
+    'Terminate account', 'Archive project', 'Wipe data', 'Downgrade plan', 'Charge card', 'Deactivate user']) {
+    assert.ok(DESTRUCTIVE.test(s), `"${s}" must be treated as destructive`);
+  }
+  // closeModal()'s dismiss matching is a SEPARATE literal-text code path —
+  // plain 'Close'/'Dismiss' buttons must stay sweepable (not in this list),
+  // and benign wording must not be collateral damage.
+  assert.ok(!DESTRUCTIVE.test('Close panel'), 'Close is a dismiss word, not a destructive verb');
+  assert.ok(!DESTRUCTIVE.test('Proceed'));
+  assert.ok(!DESTRUCTIVE.test('Download report'));
 });
 
 test('wirePageGuards registers native dialog and popup handlers', async () => {
@@ -89,4 +107,13 @@ test('v2.7 nav discovery: header OR nav, badge/whitespace-tolerant anchored matc
   assert.ok(!re.test('In'), 'anchored: prefix must not match');
   assert.ok(!re.test('Invoices overdue'), 'anchored: suffix text must not match');
   assert.ok(navLabelRe('C++ & Co.').test('C++ & Co. 2'), 'regex metachars escaped');
+});
+
+test('v2.9.4: bare Cancel stays sweepable — only "Cancel <thing>" is destructive', async () => {
+  const { DESTRUCTIVE } = await loadEmbedded();
+  assert.ok(!DESTRUCTIVE.test('Cancel'), 'a plain dialog Cancel only dismisses (closeModal literal path) — never destructive');
+  for (const s of ['Cancel plan', 'Cancel subscription', 'Cancel membership',
+    'Cancel order', 'Cancel booking', 'Cancel account', 'Cancel service', 'Cancel invoice']) {
+    assert.ok(DESTRUCTIVE.test(s), `"${s}" destroys something and must stay destructive`);
+  }
 });

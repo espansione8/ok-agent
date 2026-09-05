@@ -63,7 +63,7 @@ test('backupDatabase stamp has seconds+random precision and self-verifies', () =
   const dbPath = join(tmp, 'app.db');
   mkdirSync(backupDir, { recursive: true });
   writeFileSync(dbPath, 'DB1');
-  const fnSrc = src.match(/function backupDatabase\(\) \{[\s\S]*?\n\}/)[0];
+  const fnSrc = src.match(/function backupDatabase\((dbKind)?\) \{[\s\S]*?\n\}/)[0];
   const fn = new Function('SKIP_BACKUP', 'DB_PATH', 'BACKUP_DIR', 'MANAGE_DEV_SERVER', 'existsSync', 'mkdirSync', 'copyFileSync', 'path', 'console', 'Math', 'Date', fnSrc + '; return backupDatabase();');
   const stamp = fn(false, dbPath, backupDir, true, existsSync, mkdirSync, copyFileSync, path, console, Math, Date);
   assert.ok(stamp && stamp.length > 14 && stamp.includes('-'), 'stamp must carry sub-minute precision, got: ' + stamp);
@@ -71,4 +71,23 @@ test('backupDatabase stamp has seconds+random precision and self-verifies', () =
   assert.equal(files.length, 1);
   assert.ok(files[0].startsWith(stamp), 'snapshot written under the stamp');
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test('v2.9.3: backupDatabase warns dbKind-aware — remote ≠ misleading "file missing (null)"', () => {
+  const fnSrc = src.match(/function backupDatabase\((dbKind)?\) \{[\s\S]*?\n\}/)[0];
+  const logs = [];
+  const con = { log: (...a) => logs.push(a.join(' ')), error: (...a) => logs.push('ERR ' + a.join(' ')) };
+  const fn = new Function('SKIP_BACKUP', 'DB_PATH', 'BACKUP_DIR', 'MANAGE_DEV_SERVER', 'existsSync', 'mkdirSync', 'copyFileSync', 'path', 'console', 'Math', 'Date', fnSrc + '; return backupDatabase;');
+  // remote + no file: the A6 'remote' kind must get the specific warning,
+  // NOT the old 'file missing (null)' line that blamed the operator's flag.
+  const res = fn(false, null, 'plan/replay/db-backups', true, () => false, mkdirSync, copyFileSync, path, con, Math, Date)('remote');
+  assert.equal(res, null);
+  assert.ok(logs.some((l) => l.includes('remote/non-file') && !l.includes('file missing (null)')),
+    'remote DB must get the kind-aware warning, got: ' + JSON.stringify(logs));
+  // sqlite-file keeps the honest path error (an actual misconfiguration).
+  logs.length = 0;
+  const res2 = fn(false, '/nope/app.db', 'plan/replay/db-backups', true, () => false, mkdirSync, copyFileSync, path, con, Math, Date)('sqlite-file');
+  assert.equal(res2, null);
+  assert.ok(logs.some((l) => l.includes('file missing (/nope/app.db)')),
+    'sqlite-file must keep the honest --db-path error, got: ' + JSON.stringify(logs));
 });

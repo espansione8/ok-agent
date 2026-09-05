@@ -56,14 +56,11 @@ almost always to extract one more asset properly.
 - `scripts/render_diff.py` — renders the artboard and pixel-diffs it against the
   PDF, with raw + AA-robust metrics and a localisation grid.
 - `scripts/responsive_audit.py` — asserts every asset survives at every width.
-- `scripts/pdf_image_to_html.py` — rasterize helpers and the older
-  analyze/compare subcommands.
 
 ## Requirements
 
 ```bash
 pip install pymupdf pillow fonttools brotli   # extract + measure
-pip install psd-tools                         # only for .psd input
 pip install playwright && playwright install chromium   # baseline probe + compare
 ```
 
@@ -82,8 +79,8 @@ falling back.
 - **`.ai`** — usually opens the same way as a PDF (Illustrator embeds a
   PDF-compatible stream by default). Same path as PDF. If it won't open,
   the file was saved with "Create PDF Compatible File" off; re-export as PDF.
-- **`.psd`** — not PDF-based. `psd-tools` composites it to a flat PNG. Layers
-  give you nothing usable for geometry.
+- **`.psd`** — not PDF-based, so it flattens to a raster with no text geometry.
+  Treat it like any other flat image: ask for a PDF export.
 - **PNG/JPG/WEBP/GIF** — no text geometry at all. You cannot get 1:1 fidelity
   from a flat raster; tell the user so, and ask for the PDF or source file. Do
   not paper over it by shipping the raster as a background.
@@ -318,6 +315,21 @@ Getting this backwards turns a 1 px fix into a 3 px error.
 **`chdir` silently zeroes measurements.** If a step changes directory while a
 later one resolves font paths relatively, the lookups fail and per-glyph kerning
 comes back all zeros with no error. Use absolute paths throughout.
+
+**CTAs need real anchors without disturbing the pixels.** On the desktop
+artboard, add transparent `<a>` overlays on top of the artwork
+(`position:absolute;background:transparent`) rather than restyling or re-wrapping
+the text — the render then stays byte-identical to the reference. In the
+reflowed mobile flow, wrap the text runs in `<a>` instead. `mailto:` addresses
+and URLs printed in the design are honest targets; anything else is a
+placeholder and should be flagged to the user rather than invented.
+
+**Hit-testing a wrapped inline anchor with one point is invalid.**
+`getBoundingClientRect()` on an inline element that spans two lines returns the
+*union* of its line boxes, so the centre can land on a different line entirely
+and `elementFromPoint` reports a sibling. Iterate `getClientRects()` and probe
+each line box. That call is also viewport-relative, so scroll a below-the-fold
+CTA into view or you just get `null`.
 
 **Font substitution wastes days.** If you are tuning `letter-spacing` by more
 than a few hundredths of an em, you are compensating for the wrong font.

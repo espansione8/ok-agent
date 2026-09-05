@@ -1,484 +1,25 @@
 ---
 name: svelte-replay
-description: >
-  Self-contained, zero-dependency generator of recorded, cursor-visible Playwright
+description: Self-contained, zero-dependency generator of recorded, cursor-visible Playwright
   replay scripts for ANY SvelteKit app. Scans the whole codebase (routes, server
   actions, endpoints, navbar, login form, DB file) to build a manifest from scratch,
   then emits ONE Node ESM script that exhaustively sweeps every route, button, link,
   tab, dropdown, modal, select, checkbox and expandable row — recursing into every
   child element revealed, modal-scoped so an open dialog never lets the sweep click
   a page button hiding behind it — with a gliding in-page cursor overlay, a
-  Windows-safe DB snapshot/restore safety net (dev server stopped before restore,
-  restarted after), heartbeat liveness logging, and a coverage report. Use when asked
+  Windows-safe DB snapshot/restore safety net for local SQLite-file databases
+  (dev server stopped before restore, restarted after) — the sweep REFUSES to
+  run against a remote/non-file database (Turso/libSQL, Postgres, MySQL,
+  Mongo, etc.) unless the operator explicitly acknowledges the risk or
+  supplies a rollback route (authored `--mode scripted` runs are exempt:
+  they never sweep, they only run the hand-written steps) — heartbeat
+  liveness logging, and a coverage
+  report. Use when asked
   to "replay the app", "test every button/clickable", "full UI coverage sweep", or
   "build a demo recording from scratch". All outputs live under plan/replay/.
 ---
 
-svelte-replay — full-app recorded replay + exhaustive UI sweep (v2.8.3, self-contained)
-
-===============================================================================
-CHANGELOG (v2.8.2 → v2.8.3 — stale-tag recovery for non-navigating re-renders)
-===============================================================================
-- FIXED (found live on saftbg, full run): 8 click-failed records were all
-  the same shape — "Filter" buttons whose data-replay-cid tag was orphaned
-  by a NON-navigating re-render (filter panel redrawing its list). The
-  v2.7.1 navigated-signal handles navigation, but not this: the tag was
-  gone while the element was still visually present, so both the original
-  click AND the retry burned the full 3s scrollIntoView timeout waiting for
-  a locator whose tag no longer existed, then recorded click-failed.
-  probe() now runs resolveFresh() before clicking (and before the retry):
-  it verifies the tag still resolves, and if not, re-finds the element by
-  its semantic identity (sel + text + tid/title/aria/href) in the current
-  DOM and re-tags it with a fresh 'S'-prefixed id (can never collide with
-  census-issued numeric ids, and it never steals another element's tag).
-  A genuinely-removed element is recorded as 'click-failed: element gone
-  after re-render' immediately — no timeout burn. Live effect on saftbg:
-  the 8 failed records become real clicks.
-
-===============================================================================
-CHANGELOG (v2.8.1 → v2.8.2 — port preflight: a stale detached server invalidates the backup bracket)
-===============================================================================
-- FIXED (found live, third saftbg run): a DETACHED dev server left running
-  by a previous replay survives the next run's taskkill /T cleanup (it left
-  the old process tree) and silently occupies BASE_URL's port. The new
-  run's readiness check then passes against the STALE server while its own
-  child fights for the port — worst of all, the "quiesced" backup runs
-  with a server still holding the DB, quietly voiding the §7 bracket.
-  startDevServer() now PREFLIGHTS the port before spawning: if BASE_URL
-  already answers, it aborts with exit code 1 and a how-to-fix message
-  (stop the stale server, or declare it external with
-  --no-manage-dev-server). The script must own the port or own nothing —
-  never guess whose server it is talking to.
-
-===============================================================================
-CHANGELOG (v2.8 → v2.8.1 — three bugs found by the SECOND live run, on saftbg)
-===============================================================================
-- FIXED (found live): probe()'s `navigated` branch returned WITHOUT pushing
-  its record. On a link-heavy app (most clicks navigate!) nearly every
-  record was silently dropped — the smoke run really clicked 20/20 but
-  coverage.json reported {routes:0, elements:0, clicked:0}. rec is now
-  pushed before the return; the state-unclean path already pushed (and the
-  normal path pushes at the end), so no double-count.
-- FIXED (found live): the script never EXITED after main() finished —
-  spawn(…, { detached: true }) keeps the ChildProcess handle in the
-  parent's ref count. The final startDevServer() (the one that leaves the
-  server running for the user) pinned the event loop: coverage was written,
-  the DB restored, the server restarted — and the process printed
-  heartbeats forever. devServerProc.unref() releases the handle; the
-  detached server outlives the script as intended.
-- FIXED (found live): resolveParam gave up on ALL 35 dynamic routes because
-  each route's own param-less prefix (e.g. /accounts for /accounts/:id)
-  doesn't exist in this app — the links live on an entity hub (/companies
-  links to /dashboard/:company_id, /accounts/:company_id, …). New
-  HUB_ROUTES (§4.1, default '/companies,/home', override via
-  --hub-routes a,b): when the prefix scan yields nothing, resolveParam
-  retries the same href-shape scan on each hub before returning null. A hub
-  hit fills ALL remaining :params at once (a /documents/7/view/3 link
-  matches a multi-param shape in one step).
-
-===============================================================================
-CHANGELOG (v2.7.1 → v2.8 — second audit pass: backup bracketing, dropdown
-scoping, per-selector census cap, cross-pass id uniqueness, modal escape)
-===============================================================================
-- FIXED (safety): backupDatabase() copied the LIVE .db/-wal/-shm files while
-  the dev server was still running — the exact unsynchronized multi-file copy
-  §4.6 warns about for restore. A write landing mid-copy yields a torn
-  snapshot, and restore would then faithfully "restore" a corrupt DB. §7 now
-  brackets the backup with stopDevServer()/startDevServer() exactly like
-  every restore call site (§8 wording updated to match).
-- FIXED: probe()'s modal-close fallback only tried a button labeled EXACTLY
-  "Cancel" then Escape. A control named Close/Dismiss/No/× never matched,
-  and the legacy checkbox/anchor-hack modal (.modal-open, no <dialog>) has
-  no Escape handling at all — the modal stayed open, census() kept scoping
-  to it, and the rest of the page was silently invisible to the sweep for
-  the remainder of the route. New closeModal() helper layers: close-worded
-  button (scoped INSIDE the modal) → Escape → re-click the element that
-  OPENED the modal (the toggle for checkbox-hack modals); if the modal is
-  STILL open after all that, probe() hard-reloads the route (dialog state is
-  client-side, reload clears it) and aborts the census batch with a
-  '(modal-stuck-reload)' record instead of trapping the sweep. It
-  deliberately does NOT auto-click OK/Yes — "confirming" a dialog whose
-  action may be destructive is exactly what the DESTRUCTIVE guard exists to
-  prevent; only unambiguous dismiss words are clicked.
-- FIXED: sweepRoute()'s dropdown loop called census(page) with NO scoping.
-  census() scopes only to a modal; a hover-opened dropdown isn't one, so the
-  loop censused and probed every visible clickable on the whole page
-  mid-hover — clicking an ordinary page control navigates away or moves the
-  mouse off the dropdown, closing it before its own children were tested
-  (the same background-click bug already fixed for modals, unaddressed for
-  dropdowns). census(page, rootSel) now takes an optional root selector; the
-  dropdown loop passes DROPDOWN_SEL ('.dropdown-content, [role="menu"],
-  [role="listbox"]') and probes children ONLY when the census actually
-  resolved to a dropdown scope (every record now carries a scope field;
-  the dedup key uses it). If no dropdown opened, the loop skips probing —
-  the main sweep loop right below covers page-level elements anyway. The
-  loop also now emits the 'dropdown-opened' record writeCoverage() already
-  classified — that result existed only in the stats, never produced
-  (stats/sweep drift).
-- FIXED: the 80-element census cap was applied to the COMBINED list
-  (out.slice(0, 80)) despite §3 saying "per selector". On a page with >80
-  plain buttons/links, every later CLICKABLE selector — tbody tr, [role=tab],
-  dropdown items — got ZERO elements, not a reduced count. The cap is now
-  genuinely per selector (still applied after visibility filtering).
-- FIXED: CID_SEQ was dead code — declared at module scope as "monotonically
-  increasing census id" while the real counter lived INSIDE the
-  page.evaluate() callback, resetting to 0 every pass and unable to even see
-  the module variable. dedupKey() relies on el.cid for uniqueness, so two
-  structurally identical elements from two different passes (e.g. the first
-  button of two different modals, both "Cancel") collapsed onto one dedup
-  key and the second was silently skipped as already-visited. census() now
-  seeds its counter with CID_SEQ (passed as an evaluate argument) and
-  advances it by the number of ids issued — unique across ALL passes. The
-  dedup key's modal marker also died with v2.6's cid rewrite (el.cid != null
-  was true on EVERY record → always 'y', carrying no information); it now
-  uses the census record's real scope field (modal/dropdown/page).
-- FIXED: hand-built accordions (a div toggled by component state — the
-  common Svelte pattern) matched NO reveal branch (only modal / row-panel /
-  a details[open]-count increase were detected); their children were found
-  only by accident by the outer re-census, with depth reset to 0 and no
-  collapse step. fingerprint() now also counts [aria-expanded="true"] and
-  both open-state VECTORS (details + aria-expanded), and probe()'s reveal
-  branch fires on a count increase OR an equal-count vector change;
-  children recurse at depth+1 and the toggle is re-clicked to collapse.
-- FIXED: exclusive <details name="group"> panels dodged `fp2.open > fp.open`
-  entirely — opening one closes its sibling, so the total open-count stays
-  EQUAL and the newly-revealed subtree was never swept. The open-state
-  vector (…110… → …101…) catches the swap.
-
-===============================================================================
-CHANGELOG (v2.7 → v2.7.1 — two bugs found by the first REAL end-to-end run)
-===============================================================================
-- FIXED (found live on saftbg, SvelteKit): STALE CENSUS AFTER NAVIGATION.
-  probe()'s navigated branch goes back to the origin route, but a SvelteKit
-  client-side re-render REPLACES the DOM nodes census() had tagged — every
-  data-replay-cid attribute vanishes while the caller's batch still holds
-  locators for them. Each remaining element in the batch then burned its
-  3s scrollIntoView timeout and recorded click-failed (reproduced: one
-  navigation, then 18/20 smoke clicks failed with "waiting for locator
-  [data-replay-cid=…]"). probe() now returns 'navigated' after a route
-  change; probe recursion points (modal/row/details/rows children), the
-  dropdown loop and sweepRoute()'s batch loop all check it and abandon the
-  stale batch — the next census() re-tags fresh nodes and visited-dedup
-  prevents re-probing what was already swept.
-- FIXED (found live on saftbg): SCRIPT NEVER EXITED AFTER COMPLETING.
-  startDevServer() spawned the dev server with default stdio pipes and
-  .on('data') readers; after main() finished, those pipes kept the parent's
-  event loop alive, so the 10s heartbeat printed forever after "coverage
-  written". The server must outlive the script anyway (§7 leaves it running
-  for the user), so it is now spawned detached with its output redirected
-  to plan/replay/dev-server.log (file fds are not active handles and do
-  not pin the loop — vite output is preserved in the log instead of the
-  console relay).
-
-===============================================================================
-CHANGELOG (v2.6 → v2.7 — LOW-severity hardening: CSP-safe cursor, nav discovery)
-===============================================================================
-- FIXED (LOW, CSP): CURSOR_JS injected the overlay's styling via a <style>
-  element and inline style attributes — under a strict CSP (no style-src
-  'unsafe-inline') both are stripped, and the cursor overlay silently vanished
-  from recordings (the sweep still ran — the demo just had no cursor). Static
-  overlay styling now goes into a constructed CSSStyleSheet
-  (document.adoptedStyleSheets), which CSP's inline-style rules do not block,
-  with a <style>-element fallback for older engines; per-move left/top updates
-  already used CSSOM property assignment (never CSP-blocked), and the SVG's
-  inline animation attribute moved into the sheet for the same reason.
-- FIXED (LOW): dropdown hover targeting used page.locator('header') only — an
-  app that renders the navbar as a bare <nav> (no <header> wrapper) never had
-  its dropdowns opened, so every NAV_TREE child was silently unswept. Both
-  hover sites (nav() §4.4 and sweepRoute() §5) now target 'header, nav'.
-- FIXED (LOW): navbar parent hover matched the manifest label with
-  { exact: true }. Rendered navbar labels routinely differ from the scanned
-  manifest label by padding whitespace or a trailing count badge
-  ('Invoices 3'), and every such parent was silently never hovered — its
-  dropdown children were never swept. Matching is now an anchored regex
-  tolerant of surrounding whitespace and one trailing numeric badge
-  (navLabelRe, §4.4) — still anchored at both ends, so 'In' cannot match
-  'Invoices'; the failure mode is now 'never mismatches', not 'silently
-  skips the subtree'.
-- REPO: the skill now ships with its own regression harness (package.json +
-  node --test) that extracts the §4–§6 embedded code verbatim from SKILL.md
-  at test time and runs behavioral assertions against it (mock page + DOM).
-  Any edit that changes embedded-code behavior without keeping the tests
-  green fails `npm test` — the drift this changelog has been documenting by
-  hand for six versions is now mechanized.
-
-===============================================================================
-CHANGELOG (v2.5 → v2.6 — audit-driven pass: locator safety, DB restore guard, CLI validation)
-===============================================================================
-- FIXED (CRITICAL, found by a bug-audit with executable tests): v2.5's modal
-  scoping fixed only HALF the pipeline. census() correctly returned only the
-  modal's children — but then mapped each to a GLOBAL locator
-  `page.locator(sel).nth(i)`. Behind an open modal the global index counts
-  page-level elements too, so the probe clicked a button sitting UNDER the
-  dialog (verified: census said "Cancel", global locator resolved to a page
-  "Save" button). census() now stamps every matched element with a unique
-  temporary `data-replay-cid="N"` attribute inside the same evaluate, and the
-  locator is `page.locator('[data-replay-cid="N"]')` — the attribute only
-  ever exists on the element census actually selected, so modal/page scope is
-  respected by construction. Tags are wiped on the next census.
-- FIXED (CRITICAL, data loss): `restoreDatabaseBackup()` verified nothing. If
-  the main DB backup was missing but a `-wal`/`-shm` backup existed (e.g. a
-  crash mid-backup), it copied the stale WAL over the live one AND deleted the
-  live main DB file (`else if existsSync(f) rmSync(f)`), returning `true`.
-  Reproduced live: app.db deleted, WAL swapped, success message printed.
-  Restore now VERIFIES the main DB backup exists before touching ANY live
-  file; if it's missing it prints a loud error and returns false, leaving the
-  live DB untouched.
-- FIXED: backup stamp `.slice(0, 12)` = minute precision — two runs in the
-  same minute silently overwrote each other's backups. Stamp now has seconds
-  precision plus a random suffix (YYYYMMDDHHmmss-xxxx).
-- FIXED: `restoreDatabaseBackup()` copies the MAIN db first; only after that
-  succeeds does it copy/refresh `-wal`/`-shm`, so an interrupted restore can
-  no longer leave a WAL without its DB.
-- FIXED: `--selftest` asserted `census.toString()` contains `'modal ||
-  document'` — a source-substring check that passed while the locator bug
-  above shipped. Selftest now asserts census contains `data-replay-cid` (the
-  actual mechanism), `restoreDatabaseBackup` contains its verification, and
-  `wirePageGuards` exists.
-- FIXED: `sweepRoute()`'s new-elements loop exited when `newCount >=
-  beforeCount` — a click that reveals one element per click (lazy rows,
-  load-more) hit equality on iteration 1 and the rest were never probed.
-  Loop now continues while ANY unvisited elements remain, bounded by the
-  existing guard counter.
-- FIXED: dropdown children were censused once AFTER hovering all NAV_TREE
-  parents sequentially — only the last dropdown was still open. Each parent
-  is now hovered and censused inside the same iteration, while ITS dropdown
-  is open.
-- FIXED: `<details>` expansion — the `fp2.open > fp.open` branch pressed
-  Escape and moved on, never sweeping the revealed children. New branch
-  recurses census into the opened accordion, then re-clicks the summary to
-  close it.
-- FIXED: `--deep-selects` enumeration used `selectOption(i)` with a NUMERIC
-  index — Playwright treats that as an option VALUE, so any select whose
-  values aren't `"1","2",...` threw (30s default timeout each, behind a
-  catch). Enumeration now reads real option values/labels via evaluate.
-- FIXED (safety): option labels/values bypassed the DESTRUCTIVE guard — a
-  select whose text is innocuous could enumerate a "Void all invoices"
-  option (reproduced live). Each option's label+value is now guard-checked
-  before selection.
-- FIXED: row collapse clicked `el.loc.locator('button').first()` — an
-  arbitrary nested button (Edit/Delete/Approve), not a toggle. It now
-  re-clicks the ROW (exactly how it was expanded), falling back to Escape.
-- FIXED: `page.goBack()` failure left the sweep stranded on the navigated-to
-  page with no fallback. Now verifies it landed back on the original route
-  and hard-gotos `BASE_URL + fp.url` if not.
-- FIXED: census applied the 80-element cap BEFORE visibility filtering — 90
-  hidden + 5 visible buttons censused as "80 hidden, 0 visible" (reproduced).
-  Cap now applies to the visible set.
-- FIXED: census didn't filter `aria-disabled="true"` / `pointer-events:none`
-  elements, and `javascript:` hrefs were censused and "clicked".
-- FIXED: EXCLUDES matched against `JSON.stringify(d)` — `--exclude button`
-  excluded EVERY button because the sel field contains the word. Matching is
-  now against the semantic fields (text/tid/title/aria/href) only.
-- FIXED: DESTRUCTIVE regex matched substrings ("A**void** double charge" was
-  skipped). Now word-boundary anchored per term.
-- FIXED: native `alert()`/`confirm()`/`prompt()` dialogs could stall the run
-  (no handler); popups (`target="_blank"`, window.open) escaped the sweep
-  context. New `wirePageGuards()` registers dialog+popup handlers; §7 wires
-  it after page creation.
-- FIXED: caught Playwright actions without explicit timeouts (modal Cancel in
-  probe's recursion-close, collapse row re-click, select restore, goBack) —
-  all now carry `{ timeout: 1500 }` per the v2.4 rule.
-- FIXED: `startDevServer()` readiness accepted ANY response incl. HTTP 500
-  (`if (r)`); now requires `r.status < 500`. `stopDevServer()` slept a blind
-  800ms; now waits for the child's real `exit` event with a 5s deadline.
-- FIXED: CLI — `--param`/`--exclude` as the LAST argument pushed `undefined`
-  and `.split()` threw; a value flag passed without a value returned boolean
-  `true`; `--until abc` → NaN → zero parts; invalid `--mode` silently did
-  nothing. `val()` now returns the default when the next token is missing or
-  itself a flag; `list()` skips missing values; numeric flags go through a
-  NaN-safe parse; MODE is validated against sweep|scripted|both.
-- FIXED: coverage `clicked` stat only counted literal `clicked` + select —
-  modal-opened/row-expanded/rows-revealed/dropdown-opened/navigated are real
-  clicks and are now counted; per-result breakdown added.
-- FIXED: §8 promised "retry-once after settle on click failure" but probe()
-  had no retry. probe() now retries the click once after P.settle.
-- FIXED: SIGINT handler had no try/catch — a stopDevServer() throw would
-  skip restore AND skip exit. Wrapped in try/catch/finally, exit(130) in
-  finally.
-- FIXED: §7's own UNTIL derivation `parseInt(UNTIL_ARG, 10)` NaNs on
-  `--until abc` (same class of bug it fixed); now falls back to PARTS.length.
-- ADDED: §6.1 implements `resolveParam` as real embedded code (was prose
-  only, but required by --selftest — a generated script that forgot to
-  invent it failed selftest with no reference implementation to copy).
-- ADDED: Node >= 18 requirement documented (global fetch); §3 documents the
-  deliberate safety caps (80/selector, depth 6, 60 routes, MAX_CLICKS).
-
-===============================================================================
-CHANGELOG (v2 → v2.1 — bugfix pass)
-===============================================================================
-- FIXED: modal detection relied only on `dialog.modal-open`. Current daisyUI
-  modals (`<dialog class="modal">` + `.showModal()`) only ever get the native
-  `open` attribute — never a `modal-open` class — so the sweep never recognized
-  a modal had opened, never recursed into it, and never closed it. Selector is
-  now `dialog[open], .modal-open` (covers current daisyUI + the older
-  checkbox/anchor-hack pattern) everywhere a modal is detected or closed.
-- FIXED: the visited-element dedup key (`sel|text|tid`) collapsed onto itself
-  for any set of identical sibling controls with no data-testid — e.g. an
-  "Edit" button repeated once per table row. Only the first row's button was
-  ever probed; every other row was silently skipped. Key now also includes the
-  element's census index and href: `sel|i|text|tid|href`.
-- FIXED: `PARTS.slice(FROM, UNTIL_ARG)` — when `--until` isn't passed,
-  `UNTIL_ARG` is `null`, and `Array.prototype.slice` coerces a `null` end
-  argument to `0` (not "end of array" the way `undefined` would). Net effect:
-  the scripted PARTS phase silently ran zero parts on every default `--mode
-  both`/`scripted` run. `UNTIL` is now derived explicitly after PARTS exists.
-- FIXED: census() dropped any element that had only an `aria-label` and no
-  visible text/title/href/testid (common for icon-only buttons) — such
-  elements were never probed at all, so an icon-only "Edit" control was
-  silently skipped rather than swept. census() now also captures `aria-label`
-  and treats it as a valid identifying signal.
-- FIXED (safety, paired with the above): because icon-only controls are now
-  swept, the DESTRUCTIVE guard now also tests `aria-label`, not just
-  text/title — otherwise a newly-swept icon-only delete button could bypass
-  the destructive-action skip.
-- REMOVED: a dead, unused line in probe() (`const key = ... el.d?.text ...`)
-  left over from an earlier revision — `el.d` never existed on the census
-  element shape; the real dedup key was always the next line (`k`).
-- HARDENED: --selftest now also asserts `resolveParam` exists (§6 describes
-  it but v2's selftest checklist never checked for it), and asserts that
-  every interaction helper (click/type/fill/pickSelect/pickSelectContains)
-  literally contains `glide(` in its source — so the gliding-cursor
-  requirement is verified mechanically, not just by convention.
-
-===============================================================================
-CHANGELOG (v2.1 → v2.2 — visibility/speed decoupling + row-sweep widening)
-===============================================================================
-- FIXED: `FAST` was computed as `has('fast') && HEADLESS`, so `--fast` alone
-  in a normal (headed) run did nothing — the browser was correctly visible
-  by default, but the cursor still crawled at full pace unless `--headless`
-  was also passed, and the code printed a warning telling the user their
-  `--fast` flag was being ignored. Visibility and speed are orthogonal
-  concerns: `HEADLESS` (default off — visible unless `--headless` is
-  explicitly passed) controls whether a window is shown at all; `FAST`
-  (`= has('fast')`, no longer ANDed with `HEADLESS`) controls only how
-  quickly the visible cursor glides. The "⚠ --fast ignored in headed mode"
-  warning is removed since it's no longer true.
-- FIXED: `P`'s FAST branch zeroed `moveStep`/`settle`/`post`/`between`
-  entirely, which — combined with the next bug below — meant "fast" really
-  meant "cursor invisible/instant", not "cursor fast". FAST now uses small
-  but non-zero timings so the glide animation still plays, just quickly.
-- FIXED: `glide()`, `click()`, `type()`, and `pickSelect()` each had a
-  `if (FAST) { ...; return; }` branch that bypassed the step-animation
-  entirely and drove the page with a raw `locator.click()`/`selectOption()`
-  (or, in `glide()`'s case, a single instant `page.mouse.move()`). Under
-  `--fast` the in-page cursor overlay silently stopped tracking real
-  interactions, contradicting this doc's own GLIDE GUARANTEE. These
-  branches are removed — every helper now unconditionally calls `glide()`
-  and lets `P` (not a helper-level branch) control speed.
-- FIXED: `nav()` had the same problem one level up — its FAST branch
-  replaced the click-through-the-actual-link flow with `page.goto()`,
-  meaning under `--fast` the nav link itself was never clicked/tested at
-  all, undermining "sweep every clickable element". `nav()` now always
-  drives the click via `click()` (glide included), just faster under FAST.
-- WIDENED: `CLICKABLE`'s row entries were `tbody tr:has(button)` and
-  `tbody tr[data-expandable]`, so a row that expands purely from a
-  row-level click handler — no inner `<button>`, no `data-expandable`
-  attribute — was never censused and therefore never probed, and whatever
-  children it revealed were never swept either. Replaced with the plain
-  `tbody tr` (a strict superset of both narrower forms) so every row, and
-  every clickable revealed inside it once expanded, gets probed via the
-  existing row-expanded recursion in §5 `probe()`.
-- FIXED (follow-on): the row-collapse step after `row-expanded` assumed a
-  nested `<button>` always existed to re-click and close the row — true
-  for `:has(button)` rows, not for the row-level-click rows the widening
-  above now also sweeps. It now clicks a nested button if one exists, and
-  falls back to re-clicking the row itself when it doesn't.
-
-===============================================================================
-CHANGELOG (v2.2 → v2.3 — fast is now the default)
-===============================================================================
-- CHANGED: `--fast` is removed. Fast pacing (the small-but-nonzero P
-  timings introduced in v2.2) is now the DEFAULT for every run — headed
-  or headless. Added `--normal`, which opts INTO the old slow, deliberate
-  cursor pace meant for an actual screen-recorded demo. Polarity flip:
-  `const FAST = !has('normal')`. As before, this is independent of
-  HEADLESS — `--normal` never implies `--headless` and vice versa.
-- Practical effect: a plain `node plan/replay/replay-all.mjs` (no flags)
-  now sweeps at fast pace with the browser visible. For a demo recording,
-  pass `--normal` to slow the glide back down to a watchable pace. For a
-  headless CI/agent smoke run, no flag is needed — fast + headed-by-
-  default was already the common case; add `--headless` on top of that
-  as before, `--normal` alone if you also want to slow it down.
-
-===============================================================================
-CHANGELOG (v2.3 → v2.4 — bounded actionability timeouts on header-dependent calls)
-===============================================================================
-- FIXED (found live, by an agent run): `sweepRoute()`'s per-route loop that
-  hovers over every `NAV_TREE` parent (to pop dropdown children into view
-  for census) called `.hover()` with no explicit `timeout` — only a bare
-  `.catch(() => {})`. On any route that doesn't render the standard
-  dashboard `<header>` (e.g. login, an error page, a print/export view,
-  anything outside the authenticated shell), Playwright falls back to its
-  default 30s actionability timeout before the locator gives up and the
-  catch swallows it. That's up to `30s × (number of NAV_TREE parents)` of
-  silent dead time on every header-less route, with nothing printed to
-  say why the run is stalled — it just looks hung.
-- Same defect, smaller blast radius, in two more places: `nav()`'s single
-  hover-to-open-dropdown call, and the modal `Cancel`-button fallback
-  click in `probe()`'s dialog-close loop (run up to twice per probe).
-  Both also relied on the bare default timeout behind a `.catch()`.
-- All three now pass an explicit `{ timeout: 1500 }` so a missing target
-  fails fast instead of silently eating up to 30s. Rule going forward:
-  any Playwright action wrapped in a bare `.catch(() => {})` — i.e. "this
-  might legitimately not exist, that's fine" — MUST carry its own
-  explicit `timeout`. A caught failure should cost low seconds, not up
-  to 30s, or "expected to sometimes fail" quietly turns into "silently
-  stalls the whole run." (Applied the same fix to `resetViaForm()`'s
-  fallback submit-button click while auditing for this pattern — same
-  defect, lower blast radius since it only runs once at rollback time.)
-
-===============================================================================
-CHANGELOG (v2.4 → v2.5 — modal-scoped census + Windows-safe DB restore)
-===============================================================================
-- FIXED: `census()` always queried `document.querySelectorAll(sel)` regardless
-  of whether a modal was open. Nothing in this codebase marks the rest of the
-  page `inert` while a `<dialog>` is open, so the sweep could still see,
-  census, and click page-level buttons sitting behind/underneath an open
-  modal — testing the wrong layer while a dialog is supposed to have
-  exclusive focus. `census()` now detects `dialog[open], .modal-open` first;
-  if one exists, every selector in CLICKABLE is queried with that modal
-  element as the root instead of `document`, so while a modal is open ONLY
-  elements inside it are census'd and probed. Once the modal closes, root
-  reverts to `document` and page-level elements are swept again as before.
-  One-line scoping change (`const root = modal || document;`), but it's the
-  mechanism that guarantees "modal open → only modal buttons tested; modal
-  closed → only page buttons tested," never a mix of both in the same pass.
-- CLARIFIED (no behavior change, re-verified against the fix above): the
-  recursive `census(page)` calls already present in `probe()` — one on
-  `modal-opened`, one on `row-expanded` — inherit this scoping for free,
-  since both call the same `census()`. A modal's children are swept through
-  the modal-scoped branch; an accordion/row's newly-revealed children (no
-  modal involved) are swept through the normal document-wide branch, so
-  every button/link/tab revealed by expanding a row is still covered exactly
-  as before — only the modal case changed.
-- ADDED: dev-server lifecycle management (`startDevServer`/`stopDevServer`,
-  §4.7) to fix Windows DB corruption on restore. Root cause:
-  `restoreDatabaseBackup()` copies snapshot files back over the live
-  `DB_PATH`/`-wal`/`-shm` files while the SvelteKit dev server (and whatever
-  libSQL/better-sqlite3 handle it holds open) is still running. On Windows a
-  running process can hold a lock/mmap on the `-shm` file; overwriting the
-  `.db`/`-wal` files underneath it desyncs the shared-memory index from the
-  file that replaced it, corrupting the DB on the process's next write —
-  copying over an open file is far more likely to corrupt state on Windows
-  than on Linux/macOS, where the old inode just stays open until released.
-  Fix: every restore call site now does
-  `stopDevServer() → restoreDatabaseBackup(stamp) → startDevServer()` — the
-  server (and its file handles) is fully torn down BEFORE the snapshot copy
-  runs, and only brought back up AFTER the copy completes, so the DB files
-  are never touched while something has them open.
-- New flags `--dev-cmd`, `--dev-cwd`, `--dev-ready-path`, `--dev-ready-timeout`
-  control the dev server the script now owns. New flag
-  `--no-manage-dev-server` opts back out (assume something else — a separate
-  terminal, a CI service container — owns the server's lifecycle; restore
-  falls back to printing a manual "restart it now" instruction, matching
-  v2.4 behavior) for setups where the script spawning its own `npm run dev`
-  isn't appropriate.
-- --selftest (§7) now also asserts `startDevServer`/`stopDevServer` exist as
-  functions, and asserts `census.toString()` contains `'modal || document'`
-  — same rigor as the existing `glide(` check — so a generated script that
-  only describes the modal-scoping fix in a comment fails --selftest instead
-  of silently shipping without it.
+svelte-replay — full-app recorded replay + exhaustive UI sweep (v2.9.4, self-contained)
 
 ===============================================================================
 0. ZERO-DEPENDENCY PRINCIPLE
@@ -498,28 +39,97 @@ Static scan only (globs + regex; never execute app code). Write the results as
 a JS const MANIFEST embedded in the generated script AND to
 plan/replay/manifest.json:
 
-A1 ROUTES: glob src/routes/**/+page.svelte → paths; [p] → :p, [...p] → *p.
-A2 ACTIONS: +page.server.ts `export const actions` names per route.
-A3 ENDPOINTS: +server.ts GETs that return files (downloads) — sweep fetches
-   them in-page instead of navigating.
+MODE DETECTION (v2.9): if src/routes/**/+page.svelte exists → SvelteKit mode
+(scan proceeds with A1–A7 below). If src/app.html + src/main.js|ts exist but
+src/routes does NOT → SPA mode (A1b; A2–A3 are skipped, A4–A7 still run).
+Neither → abort with an explanatory message (not a Svelte/SvelteKit app).
+
+A1 ROUTES: glob src/routes/**/+page.svelte → paths. Before converting to a
+   URL: (a) DROP any path segment matching ^\(.*\)$ — SvelteKit route groups,
+   e.g. (app)/dashboard/+page.svelte → /dashboard — they scope +layout.svelte
+   only and never appear in the URL; a route file living under a group still
+   contributes its ACTIONS/LOGIN/etc scan (A2-A4) via its real file path,
+   only the emitted URL drops the group segment; (b) strip a trailing
+   `=matcherName` from a bracketed segment (e.g. [id=integer] → [id]) —
+   matchers validate at compile time and are never part of the param name;
+   then (c) [p] → :p, [...p] → *p, [[p]] → :p (optional param — also
+   register the param-less route so both forms get swept). Collapse
+   duplicate URLs that two different groups resolve to after stripping.
+A1b ROUTES (SPA mode): the scan CANNOT derive routes from files, so it
+   discovers them from the source instead — (a) every string literal passed
+   to router APIs (svelte-spa-router: `Router({ routes: [...] })` entries
+   and `navigate('/x')`; svelte-routing: `navigate('/x')`; the built-in
+   `history.pushState/replaceState` and `goto('/x')` calls), (b) every
+   `href="/x"` and `to="/x"` literal on `<a>`/`<Link>` in src/**/*.{svelte,js,ts},
+   (c) `--routes /a,/b/:id` CLI override (comma-separated; `:name` segments
+   become params). Strings are captured ONLY when they start with `/` and
+   contain no spaces or template interpolation — a literal is a route
+   candidate, not a fact. Dead routes surface during the queue drain, not
+   from a pre-sweep probe: the emitted main() has no per-route HTTP/JS
+   verification pass — every queued route is warm-up-goto'd and then
+   sweepRoute()'d, and a route that fails to render/run yields a
+   `route-failed` record in coverage while the run continues. Duplicate
+   prefixes collapse; paths found only inside comments are kept (harmless:
+   an unusable route produces a route-failed record, nothing stops).
+A2 ACTIONS: +page.server.ts `export const actions` names per route. (Skipped
+   in SPA mode — no server actions by definition; form posts, if any, are
+   swept as UI interactions only.)
+A3 ENDPOINTS: +server.ts GETs that return files (downloads) — NOT
+   IMPLEMENTED by the current generator: the A1 route scan covers
+   +page.svelte only, so a +server.ts download endpoint is never queued,
+   and the emitted sweep fetches no raw endpoints. A download is exercised
+   only if a page the sweep visits links to it (Playwright handles the
+   download as an ordinary navigation) or an author adds an explicit PARTS
+   step. (Skipped in SPA mode.)
 A4 LOGIN: route + selectors scanned from the login markup
    (input ids/names/types, submit button text). Fallbacks if scan finds
    nothing: #login-email / #login-password / button "Log in".
-A5 NAVBAR: header OR bare <nav> component (both are scanned, v2.7) →
-   NAV_TREE = { '': [top-level links],
-   'Parent': [{label, href}...] }. Drives hover-open + seeds the route queue.
-A6 DB: grep for sqlite path (dev.db|*.sqlite|DB_PATH|better-sqlite3) → dbGuess.
-   Also detect reset route (reset|restore-baseline) → resetHint.
+A5 NAVBAR: header/nav/menu/sidebar components (*.svelte files whose PATH
+   matches nav|header|menu|sidebar) → NAV_TREE = { '': [every link found],
+   'Parent': [{label, href}...] } — parent groups come from three generic
+   patterns, all best-effort regex (Svelte is not parsed): (a) native
+   <details><summary>Label</summary> groups; (b) dropdown menus (a
+   role="button"/tabindex label followed by a .dropdown-content link list);
+   (c) nested <li>Label<ul> lists. Menus built any other way (custom
+   components, JS-driven popups) yield top-level links only — hand-add the
+   parent entry to NAV_TREE in the emitted script. Drives the dropdown
+   hover-open census in sweepRoute (§5) and nav() lookups for authored PARTS.
+   It does NOT seed the drain queue — the queue is the MANIFEST route list
+   (§7); NAV_TREE destinations are +page.svelte routes already in the
+   manifest and are reached in-page while their route is swept.
+A6 DB: grep for sqlite path (dev.db|*.sqlite|DB_PATH|better-sqlite3) → dbGuess,
+   dbKind: 'sqlite-file'. If that yields nothing, grep for signs of a
+   non-file database and set dbKind: 'remote' instead (still dbGuess: null —
+   there is no local file to snapshot): @libsql/client or a `libsql:`/
+   `https:` createClient() url (Turso), TURSO_DATABASE_URL/TURSO_AUTH_TOKEN
+   env names, the `postgres`/`pg` packages or a DATABASE_URL starting
+   postgres:// or postgresql://, mysql2, mongodb/mongoose. Anything matching
+   neither is dbKind: 'unknown'. dbKind is baked into the manifest so the
+   emitted script's DB-safety message is specific ("this app's database
+   can't be file-snapshotted — point BASE_URL at a disposable copy/branch
+   before sweeping, or supply --reset-url") rather than the generic
+   "file missing" wording. The generator also prints the kind at
+   generation time (⚠-prefixed for remote/unknown) and bakes a `// DB: …`
+   line into the emitted script's header, so a remote-DB app is flagged
+   BEFORE the first run, not when the no-rollback gate fires. Also detect
+   reset route (reset|restore-baseline) → resetHint.
 A7 Per-route <select>/dialog/details density (advisory for the report).
 
 ===============================================================================
 2. PHASE B — EMIT plan/replay/replay-all.mjs
 ===============================================================================
 One Node ESM file. Imports ONLY: playwright, node:fs, node:child_process, node:path.
-Order: (1) CLI parsing §3, (2) MANIFEST const, (3) backup/restore §4.6,
-(4) dev-server lifecycle §4.7, (5) embedded blocks §4, (6) census/probe/sweep
-§5, (7) param resolution §6, (8) PARTS array (empty by default) —
-immediately followed by the UNTIL derivation (see §3), (9) main() §7.
+Actual order in the generated file (scripts/generate.mjs splices the SKILL
+blocks in this sequence): (1) MANIFEST consts — manifest data + NAV_TREE +
+the PARTS array (empty by default); (2) the §4.1 CLI block (FLAG_HELP +
+strict argv validation + --help); (3) the §4 helper blocks (cursor, guards,
+nav, reset, DB snapshot/restore, dev-server lifecycle); (4) §5
+census/probe/sweep; (5) §6.1 resolveParam; (6) the §7 main() block — UNTIL
+is derived at the top of that block (before main() runs; see §3), which is
+why PARTS must already be in scope from (1). The CLI lives after the
+MANIFEST consts rather than at the very top because the consts carry the
+baked app facts — the argv validation runs at load time and only reacts to
+process.argv, so ordering is irrelevant to it.
 
 MANDATORY PRE-RUN GATES (tell the user to run all three):
   node --check plan/replay/replay-all.mjs          # syntax
@@ -533,18 +143,87 @@ stop it first or pass --no-manage-dev-server so the script assumes the
 existing one instead of a second instance fighting over the same port.
 
 ===============================================================================
-3. CLI (all flags must exist and be parsed)
+3. CLI — TWO SURFACES: generator-time flags vs replay-time flags
 ===============================================================================
---base-url --user --pass --company --db-path --backup-dir --skip-backup
---reset-url --mode sweep|scripted|both (default both) --from N --until N
---max-clicks N (2000) --allow-destructive --exclude TEXT (repeatable)
---deep-selects --month YYYY-MM --shot-dir DIR --param name=value (repeatable)
---normal --headless --selftest
---dev-cmd CMD (default "npm run dev") --dev-cwd DIR (default ".")
---dev-ready-path PATH (default "/") --dev-ready-timeout N (default 30000)
---no-manage-dev-server (assume an externally-managed dev server; restore
-  falls back to printing a manual restart instruction instead of spawning
-  or killing anything — see §4.7)
+The generated replay script (plan/replay/replay-all.mjs) accepts EXACTLY the
+flags in the §4.1 FLAG_HELP table. That table is canonical: it drives both
+the strict validator and the printed `--help`, so the list below can never
+drift from what the script actually accepts. The generator (scripts/
+generate.mjs) has its own table (GEN_FLAG_ARITY + printUsage). Flags marked
+baked are fixed into the manifest at scan time; the generator accepts them
+so the emitted script is self-describing, and the replay flag of the same
+name overrides the baked default at run time.
+
+REPLAY-TIME FLAGS (plan/replay/replay-all.mjs):
+  --help --headless --normal --selftest
+  --mode sweep|scripted|both (default both) --from N --until N
+  --max-clicks N (2000) --allow-destructive --exclude TEXT (repeatable)
+  --deep-selects --month YYYY-MM --shot-dir DIR
+  --base-url URL --user U --pass P --company ID
+  --db-path FILE --backup-dir DIR (default plan/replay/db-backups)
+  --skip-backup --reset-url /route --i-accept-no-db-rollback
+  --no-manage-dev-server --hub-routes /a,/b
+  --param name=value (repeatable) --hash-routes (override the baked default)
+  --dev-cmd CMD (default "npm run dev") --dev-cwd DIR (default ".")
+  --dev-ready-path PATH (default "/") --dev-ready-timeout N (default 30000)
+
+GENERATOR-TIME FLAGS (scripts/generate.mjs — baked into the manifest; the
+replay script REJECTS these with exit code 2, because a run cannot change the
+app facts it was generated for):
+  --help (print the usage and exit 0; wins over other flags)
+  --no-login (force-skip the login phase even if the scan found one — for
+    sweeps that must stay logged-out, e.g. testing the public surface)
+  --after-login /route (default /home: where the app lands after a successful
+    login — the post-login verification target. Windows Git Bash caveat:
+    MSYS2 rewrites leading-slash CLI args into Windows paths (even after a
+    '#'); the generator refuses drive-letter-shaped values loudly, and
+    `MSYS_NO_PATHCONV=1` disables the rewriting.)
+  --company-hub /hub (entity-hub route for resolveParam; default /companies;
+    '' = none)
+  --routes /a,/b/:id (SPA mode: explicit route list overriding/completing the
+    A1b source scan; `:name` segments are params resolved via §6)
+  --param name=value (seed resolveParam overrides; repeatable)
+  --app-name NAME (manifest label; default: folder name)
+
+BOTH SURFACES (generator bakes the default; replay honors the same flag):
+  --base-url URL --hash-routes --user U --pass P --db-path FILE
+
+--hash-routes (v2.9): the app is a hash-routed SPA — svelte-spa-router etc.
+  The document URL path never changes; routes live in the URL fragment. All
+  app navigation goes through toAppUrl()/toDocUrl(), and fingerprint() counts
+  the fragment as part of route identity. Path-routed apps are unaffected —
+  this flag is identity for them. scripts/generate.mjs bakes it into the
+  generated script at scan time, so the emitted script is self-describing.
+
+--no-manage-dev-server (replay): assume an externally-managed dev server;
+  restore falls back to printing a manual restart instruction instead of
+  spawning or killing anything — see §4.7.
+
+--i-accept-no-db-rollback (replay, v2.9.2): required to proceed when no DB
+  snapshot could be taken — remote/non-file DB, --skip-backup, or
+  --no-manage-dev-server — AND no --reset-url was given. Deliberately
+  explicit and a little awkward to type: without it or a --reset-url, main()
+  (§7) aborts before the browser launches rather than running an exhaustive
+  click/submit sweep against data with no way back. See §4.6/§7. v2.9.3:
+  NOT required for a `--mode scripted` run — authored PARTS-only runs never
+  drain the route queue and are exempt via runIsInert; sweep/both runs need
+  this flag or a --reset-url.
+
+NOTE (v2.9.3): unknown flags and unexpected positional args are HARD ERRORS
+(exit code 2) in BOTH the generator and the emitted replay script — the §4.1
+embedded code validates the whole argv against its flag table before any flag
+takes effect, and scripts/generate.mjs does the same for its own CLI. A stale
+`--project` (a flag that never existed for the generated script and was
+removed from the generator) is rejected with a specific message instead of
+silently falling through to the default mode, and `--mode typo` was already
+rejected by the mode guard. A typo'd flag must never quietly run a full
+sweep with the wrong intent. `node plan/replay/replay-all.mjs --help` and
+`node scripts/generate.mjs --help` print every accepted flag with a one-line
+description (plus the three gates, replay only) and exit 0 — the help text
+lives in the SAME table the validator derives its arities from, so the
+printed list can never drift from what is accepted, and `--help` wins even
+when other (even unknown) flags are present.
+
 
 CRITICAL: dev-server ownership is opt-out, not opt-in —
 `MANAGE_DEV_SERVER = !has('no-manage-dev-server')` defaults to TRUE. This is
@@ -557,6 +236,25 @@ setups where the script must not spawn a process (e.g. it IS the dev
 server's parent process already, or a CI container manages it) — those
 setups still get correctness, just via the printed manual-restart prompt
 from v2.4 instead of automatic management.
+
+CRITICAL: `backupDatabase()` returning `null` must never be treated as "safety
+declined gracefully" — it means the run that's about to submit forms and
+fire +page.server.ts actions across the whole app has NO way back. This is
+the common case, not an edge case: A6 only recognizes a local SQLite file,
+so it returns null on Turso/libSQL, Postgres, MySQL, Mongo, or any DB the
+scan doesn't recognize — silently, on the first run, with nothing else
+wrong. §7's main() checks `if (!runIsInert && !stamp && !RESET_URL && !NO_ROLLBACK_ACK)`
+immediately after the backup/restart bracket and aborts with exit code 1
+before `chromium.launch()` — the dev server is left running either way (the
+bracket's final `startDevServer()` already ran), only the browser/sweep is
+withheld. `runIsInert` is the ONE deliberate exemption: a `--mode scripted`
+run executes only hand-authored PARTS (it never drains the route queue — §7
+MODE routing), so it fires nothing the operator didn't write by hand;
+sweep/both runs always drain the queue and are never exempt, and a
+logged-out SPA public-surface sweep is NOT exempt either (public forms
+mutate remote data). `--i-accept-no-db-rollback` or `--reset-url` is the
+only way past the gate for those runs; there is no default that silently
+proceeds.
 
 CRITICAL: const FAST = !has('normal');  // fast is the DEFAULT; --normal opts into recording pace
 Visibility and speed are two different flags, never conflate them:
@@ -577,12 +275,13 @@ CRITICAL: `--until` must NOT be used raw. `val('until', null)` yields `null`
 when the flag is absent, and `Array.prototype.slice(begin, null)` coerces
 `null` to `0` — NOT "end of array" the way `undefined` would — so
 `PARTS.slice(FROM, UNTIL_ARG)` silently runs zero scripted parts by default.
-Immediately after PARTS is declared (§2 step 7), derive:
-  const UNTIL = UNTIL_ARG != null ? (parseInt(UNTIL_ARG, 10) || PARTS.length) : PARTS.length;
+Immediately after PARTS is declared (§2 step 7), validate and derive:
+  if (UNTIL_ARG != null && !Number.isFinite(parseInt(UNTIL_ARG, 10))) { console.error('✗ invalid --until "' + UNTIL_ARG + '" (expected a number)'); process.exit(2); }
+  const UNTIL = UNTIL_ARG != null ? parseInt(UNTIL_ARG, 10) : PARTS.length;
 and use `PARTS.slice(FROM, UNTIL)` everywhere (§7). Never reference
-UNTIL_ARG directly outside this derivation. (The `|| PARTS.length` guards
-both `null`/`undefined` AND `--until abc` → NaN, which plain parseInt
-propagates into `slice(0, NaN)` = zero parts silently.)
+UNTIL_ARG directly outside this derivation. (Absent → all parts; `0` is
+honored and means "run none" — v2.9.3's `|| PARTS.length` swallowed it into
+"run all". A present-but-non-numeric value exits 2 like any malformed flag.)
 
 SAFETY CAPS (deliberate, disclosed — the sweep is "exhaustive" within these):
 - census() probes at most 80 VISIBLE elements per selector per pass
@@ -603,6 +302,83 @@ import { mkdirSync, copyFileSync, existsSync, writeFileSync, rmSync, openSync } 
 import { spawn, execSync } from 'node:child_process';
 import path from 'node:path';
 const args = process.argv.slice(2);
+// v2.9.3 STRICT CLI + --help — ONE ordered flag table (name, arity, help
+// text) drives BOTH the validator and the printed usage, so `--help` can
+// never drift from what the validator accepts (and vice versa). Arity 0 =
+// boolean; 1 = takes exactly one value token (repeatable flags like
+// --exclude/--param take one token per occurrence). Unknown flags and stray
+// positional args exit with code 2 BEFORE any flag takes effect — a stale
+// --project or a typo'd flag must not silently run the DEFAULT mode with the
+// wrong intent.
+const FLAG_HELP = [
+  ['help', 0, 'print this flag list + the three gates, then exit 0'],
+  ['headless', 0, 'hide the browser window (default: visible)'],
+  ['normal', 0, 'slow, recording-pace cursor (fast is the default)'],
+  ['selftest', 0, 'verify wiring, no browser/app launch'],
+  ['mode', 1, 'sweep | scripted | both — what this run does (default both)'],
+  ['from', 1, 'first PARTS index to run, 0-based (default 0)'],
+  ['until', 1, 'last PARTS index to run (default: all parts)'],
+  ['max-clicks', 1, 'global click budget (default 2000)'],
+  ['base-url', 1, 'app URL (default http://localhost:5173; baked in at generation)'],
+  ['user', 1, 'login username/email (default "1")'],
+  ['pass', 1, 'login password (default "1")'],
+  ['company', 1, 'entity id filling :cid/:companyId/:company route params (generic: prefer --param name=value)'],
+  ['hash-routes', 0, 'app routes live in the URL fragment (baked in at generation)'],
+  ['hub-routes', 1, 'entity-hub pages scanned for dynamic-route links (default /companies,/home)'],
+  ['param', 1, 'pin a dynamic-route param: --param name=value (repeatable)'],
+  ['exclude', 1, 'skip elements whose text/testid/title/aria/href contains TEXT (repeatable)'],
+  ['allow-destructive', 0, 'click delete/logout-shaped controls (default: skipped-destructive)'],
+  ['deep-selects', 0, 'enumerate every <select> option instead of sampling'],
+  ['skip-backup', 0, 'do not snapshot the DB'],
+  ['backup-dir', 1, 'snapshot directory (default plan/replay/db-backups)'],
+  ['db-path', 1, 'SQLite file to snapshot/restore (default: manifest DB or $DB_PATH)'],
+  ['reset-url', 1, 'route that restores known-good data when no snapshot exists'],
+  ['i-accept-no-db-rollback', 0, 'proceed with no snapshot and no --reset-url (SKILL §3: the explicit escape hatch)'],
+  ['no-manage-dev-server', 0, 'assume an external dev server owns BASE_URL; never spawn or kill it'],
+  ['dev-cmd', 1, 'dev server command (default "npm run dev")'],
+  ['dev-cwd', 1, 'dev server working directory (default ".")'],
+  ['dev-ready-path', 1, 'URL path polled for dev-server readiness (default "/")'],
+  ['dev-ready-timeout', 1, 'readiness-poll timeout in ms (default 30000)'],
+  ['month', 1, 'YYYY-MM grouping for the report (default: current month)'],
+  ['shot-dir', 1, 'save per-sweep screenshots into this directory'],
+];
+const FLAG_ARITY = Object.fromEntries(FLAG_HELP.map(([n, a]) => [n, a]));
+function printHelp() {
+  console.log(`svelte-replay replay-all.mjs — generated by svelte-replay (SKILL.md is the spec)
+Usage: node replay-all.mjs [flags]
+
+Flags:
+${FLAG_HELP.map(([n, a, d]) => `  --${n}${a ? ' <value>' : ''}   ${d}`).join('\n')}
+
+Three gates, in order (from the app root):
+  1. node --check plan/replay/replay-all.mjs
+  2. node plan/replay/replay-all.mjs --selftest
+  3. node plan/replay/replay-all.mjs --headless --mode sweep --max-clicks 20`);
+  process.exit(0);   // printHelp() IS the exit — never fall through into main()
+}
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--help') printHelp();   // --help wins anywhere on the line
+  const t = args[i];
+  if (!t.startsWith('--')) {
+    const prev = args[i - 1];
+    if (!(prev && prev.startsWith('--') && FLAG_ARITY[prev.slice(2)] === 1)) {
+      console.error(`✗ unexpected positional argument "${t}" — this script takes flags only (see SKILL.md §3 for the flag list)`);
+      process.exit(2);
+    }
+    continue;
+  }
+  const name = t.slice(2);
+  if (!(name in FLAG_ARITY)) {
+    console.error(name === 'project'
+      ? '✗ --project was REMOVED: the replay script is generated per-app and takes no project path — run plan/replay/replay-all.mjs from the app root and pass the §3 flags'
+      : `✗ unknown flag --${name} — stale or typo'd flags are NOT silently ignored (exit code 2). See SKILL.md §3 for the accepted flags.`);
+    process.exit(2);
+  }
+  if (FLAG_ARITY[name] === 1 && (args[i + 1] == null || args[i + 1].startsWith('--'))) {
+    console.error(`✗ --${name} needs a value (next argument missing or looks like a flag)`);
+    process.exit(2);
+  }
+}
 const has = (n) => args.includes('--' + n);
 // val() guards the trailing-flag case: `--mode` as the last argv token (or
 // followed by another flag) used to return boolean true, silently defeating
@@ -617,35 +393,86 @@ const val = (n, d) => {
 // `--param` as the last token used to poison PARAM_OVERRIDES and throw.
 const list = (n) => { const o = []; for (let i = 0; i < args.length; i++) if (args[i] === '--' + n && args[i + 1] != null && !args[i + 1].startsWith('--')) o.push(args[i + 1]); return o; };
 const parseIntSafe = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
+// v2.9.4 STRICT NUMERICS: a present-but-non-numeric value is a typo, not a
+// default — exit 2 like any other malformed flag instead of silently running
+// with the wrong budget/slice.
+const reqInt = (n, d, min) => {
+  const raw = val(n, null);
+  if (raw == null) return d;
+  const v = parseIntSafe(raw, NaN);
+  if (!Number.isFinite(v)) { console.error(`✗ invalid --${n} "${raw}" (expected a number)`); process.exit(2); }
+  return Math.max(min, v);
+};
 const HEADLESS = has('headless');   // default: visible. Only --headless hides the window.
 const FAST = !has('normal');        // default: fast. Pass --normal for the slow, recording-pace cursor.
 const BASE_URL = val('base-url', 'http://localhost:5173');
+// v2.9 hash-SPA adapter: hash-routed SPAs (svelte-spa-router etc.) keep the
+// document URL path fixed (often just '/') and carry the route in the URL
+// fragment (BASE_URL/#/route). All app-level navigation below goes through
+// toAppUrl(), which prefixes '#'. Path-routed apps (SvelteKit, SPA with the
+// History API) are unaffected — identity. goBack() still returns to the
+// literal document URL because that is what the browser history stores.
+const HASH_ROUTES = has('hash-routes');
+// v2.9.3 FRAGMENT-AWARE NORMALIZATION: hash-SPA fp urls look like '/#/tasks'
+// (document pathname + fragment) — the ROUTE is the fragment content. The old
+// toDocUrl stripped only a LEADING '#', so '/#/tasks' survived whole: probe()
+// queued it as a route and toAppUrl('/#/tasks') produced a DOUBLE hash
+// ('#/#/tasks') whose fragment the router reads as '/#/tasks' — a dead route.
+// Normalize both directions: strip the fragment (and, for hash apps, the
+// constant document path) to get the plain route, then '#' + route back to a
+// document URL. Path-routed apps never put '#' in fp urls, so both helpers
+// are identity for them.
+const toDocUrl = (r) => {
+  const s = String(r || '');
+  const h = s.indexOf('#');
+  if (h === -1) return s;
+  const frag = s.slice(h + 1);
+  return frag === '' || frag.startsWith('/') ? frag : s.replace(/^#/, '');
+};
+const toAppUrl = (r) => (HASH_ROUTES ? '#' + toDocUrl(r) : r);
 const USER = val('user', '1'); const PASS = val('pass', '1');
+// v2.9.4: generic entity-id hint for resolveParam (§6.1 fills :cid/:companyId/
+// :company only) — NOT a login step. There is no post-login "select" action;
+// for any other param name use --param name=value.
 const COMPANY = val('company', null);
 const DB_PATH = val('db-path', process.env.DB_PATH ?? null);
 const BACKUP_DIR = val('backup-dir', 'plan/replay/db-backups');
 const SKIP_BACKUP = has('skip-backup');
 const RESET_URL = val('reset-url', null);
+// v2.9.4: a reset route must look like a route — catches shell path-mangling
+// and typos at load instead of a confusing goto failure mid-run.
+if (RESET_URL != null && (!/^[#/~.]/.test(RESET_URL) || /[A-Za-z]:\//.test(RESET_URL))) { console.error(`✗ invalid --reset-url "${RESET_URL}" (expected an app route starting with / or #)`); process.exit(2); }
+// v2.9.2: explicit, awkward-on-purpose escape hatch — see the §3 CRITICAL
+// note. Without this (or --reset-url), main() refuses to run the sweep when
+// backupDatabase() returned null, instead of silently proceeding unguarded.
+const NO_ROLLBACK_ACK = has('i-accept-no-db-rollback');
 const MODE = val('mode', 'both');
 if (!['sweep', 'scripted', 'both'].includes(MODE)) { console.error(`✗ invalid --mode "${MODE}" (expected sweep | scripted | both)`); process.exitCode = 2; process.exit(2); }
-const FROM = Math.max(0, parseIntSafe(val('from', '0'), 0));
+const FROM = reqInt('from', 0, 0);
 const UNTIL_ARG = val('until', null);   // resolve to UNTIL only after PARTS exists — see §3/§7
-const MAX_CLICKS = Math.max(1, parseIntSafe(val('max-clicks', '2000'), 2000));
+const MAX_CLICKS = reqInt('max-clicks', 2000, 1);
 const ALLOW_DESTRUCTIVE = has('allow-destructive');
 const EXCLUDES = list('exclude');
 const DEEP_SELECTS = has('deep-selects');
 const MONTH = val('month', new Date().toISOString().slice(0, 7));
 const SHOT_DIR = val('shot-dir', null);
-const PARAM_OVERRIDES = Object.fromEntries(list('param').map((s) => { const [k, ...v] = s.split('='); return [k, v.join('=')]; }));
+// v2.9.4: every --param token must be name=value (a bare name is a typo, not
+// an empty override) — and generator-baked MANIFEST.params seeds the map, so
+// a scan-time --param survives into the run (run-time --param wins on clash).
+for (const t of list('param')) if (!t.includes('=')) { console.error(`✗ invalid --param "${t}" (expected name=value)`); process.exit(2); }
+const PARAM_OVERRIDES = { ...(MANIFEST.params ?? {}), ...Object.fromEntries(list('param').map((s) => { const [k, ...v] = s.split('='); return [k, v.join('=')]; })) };
 // v2.8.1 HUB_ROUTES: entity-hub pages whose links resolve dynamic params
-// (§6.1 hub fallback). Extend per app in Phase A (§1 A5/A7) — e.g. saftbg:
-// ['/companies', '/home'].
+// (§6.1 hub fallback). v2.9.2: neither A5 (navbar) nor A7 (select/dialog
+// density) actually derives this — it is a static default plus the
+// --hub-routes CLI override; per-app values must be set by hand (e.g.
+// --hub-routes /companies,/home when the app's entity hub lives there)
+// until/unless a future Phase A step scans for entity-hub pages for real.
 const HUB_ROUTES = val('hub-routes', '/companies,/home').split(',').map((s) => s.trim()).filter(Boolean);
 const MANAGE_DEV_SERVER = !has('no-manage-dev-server');   // default: script owns the dev server's lifecycle (see §4.7)
 const DEV_CMD = val('dev-cmd', 'npm run dev');
 const DEV_CWD = val('dev-cwd', '.');
 const DEV_READY_PATH = val('dev-ready-path', '/');
-const DEV_READY_TIMEOUT = Math.max(1000, parseIntSafe(val('dev-ready-timeout', '30000'), 30000));
+const DEV_READY_TIMEOUT = reqInt('dev-ready-timeout', 30000, 1000);
 const P = FAST ? { moveStep: 2, settle: 40, typeDelay: 4, post: 90, between: 200 }
                : { moveStep: 14, settle: 280, typeDelay: 50, post: 550, between: 1300 };
 // FAST never zeroes these out — a 0ms moveStep collapses glide()'s per-step
@@ -749,18 +576,40 @@ const settleHydration = async (page) => {           // ONLY once per navigation
   await page.waitForTimeout(250);
 };
 const click = async (page, locator, label) => {
-  const c = await center(locator); await glide(page, c.x, c.y); await sleep(P.settle);
-  await page.mouse.click(c.x, c.y); await sleep(P.post);
+  // v2.9.1 ELEMENT-ANCHORED DISPATCH (the v2.9 locator contract, final form):
+  // the glide is purely a COSMETIC cursor animation. The actual input event
+  // is anchored to the ELEMENT, not the coordinates: post-glide, the locator
+  // is resolved into an ElementHandle (evaluateHandle — real Playwright API,
+  // so this is the LAST-MOMENT snapshot of the true node) and the event
+  // dispatches on THAT node. A re-render that parks an impostor under the
+  // glided coordinates can never receive the click; if the true node
+  // detached in the final ms, handle.click() THROWS (real ElementHandle
+  // semantics) and the catch falls back to locator.click(), which lets
+  // Playwright re-resolve the selector. If that also fails — the element is
+  // genuinely gone — the throw propagates to probe(), and THAT throw is the
+  // retry signal that drives resolveFresh's stale-tag recovery (v2.8.3).
+  // v2.8.4's re-center check stays, demoted to cursor-accuracy duty: it
+  // makes the recording glide to where the element IS, not where it was
+  // when the batch was built.
+  let c = await center(locator); await glide(page, c.x, c.y); await sleep(P.settle);
+  const c2 = await center(locator).catch(() => c);
+  if (Math.abs(c2.x - c.x) > 4 || Math.abs(c2.y - c.y) > 4) {
+    c = c2; await glide(page, c.x, c.y); await sleep(Math.min(P.settle, 150));
+  }
+  const handle = await locator.evaluateHandle((n) => n).catch(() => null);
+  if (handle) { await handle.click({ timeout: 3000 }).catch(() => locator.click({ timeout: 3000 })); await sleep(P.post); return; }
+  await locator.click({ timeout: 3000 }); await sleep(P.post);
 };
 const type = async (page, locator, text, label) => {
   const c = await center(locator); await glide(page, c.x, c.y); await sleep(P.settle);
-  await page.mouse.click(c.x, c.y);
+  await locator.click({ timeout: 3000 });   // element-anchored focus (v2.9.1): focus the TRUE node first (never click at glided coordinates); keys/fill then land in that element
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.type(text, { delay: P.typeDelay }); await sleep(P.post);
 };
 const fill = async (page, locator, value, label) => {
   const c = await center(locator); await glide(page, c.x, c.y); await sleep(P.settle);
-  await page.mouse.click(c.x, c.y); await locator.fill(value); await sleep(P.post);
+  await locator.click({ timeout: 3000 });   // element-anchored focus (v2.9.1): focus the TRUE node first (never click at glided coordinates); keys/fill then land in that element
+  await locator.fill(value); await sleep(P.post);
 };
 const pickSelect = async (page, locator, optionLabel, label) => {   // glide there, then focus+selectOption — NEVER mouse-click the option list itself
   const c = await center(locator); await glide(page, c.x, c.y); await sleep(P.settle);
@@ -823,11 +672,23 @@ const closeModal = async (page, opener) => {
 // user's own Chrome) and hard-exit with the pending exit code. Safe by
 // construction: coverage, DB restore and the server restart have ALREADY
 // happened by the time this runs, and the dev server is detached.
-const teardown = async (browser) => {
+const teardown = async (browser, watchdogMs = 8000) => {
   if (!browser) return;
-  const stalled = await Promise.race([browser.close().then(() => false), sleep(8000).then(() => true)]);
-  if (stalled) {
-    console.log('      ⚠ teardown: browser.close() did not settle in 8000ms — killing orphaned Playwright browsers, forcing exit');
+  // v2.9.4 WATCHDOG RACE: v2.9.3 awaited close() first and checked a flag
+  // after — on a hung close() the await never settled, so the check was
+  // unreachable and the script hung forever (the exact failure this exists
+  // for); on a slow-but-successful close the flag had already fired and the
+  // kill path misfired. Race instead: the script proceeds to kill+exit rather
+  // than hanging, and a close() that rejects counts as closed (nothing live
+  // left to kill). Promise.race does NOT cancel its loser — the timer is
+  // still cleared on settle so a clean close exits immediately with no tail.
+  let timer;
+  const timeout = new Promise((res) => { timer = setTimeout(() => res('timeout'), watchdogMs); });
+  let result = 'timeout';
+  try { result = await Promise.race([browser.close().then(() => 'closed', () => 'closed'), timeout]); }
+  finally { clearTimeout(timer); }
+  if (result === 'timeout') {
+    console.log(`      ⚠ teardown: browser.close() did not settle in ${watchdogMs}ms — killing orphaned Playwright browsers, forcing exit`);
     try { execSync('powershell -NoProfile -Command "Get-Process chrome,headless_shell -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \'*ms-playwright*\' } | Stop-Process -Force"', { stdio: 'ignore' }); } catch {}
     try { execSync("pkill -f 'ms-playwright' 2>/dev/null", { stdio: 'ignore' }); } catch {}
     process.exit(process.exitCode || 0);
@@ -877,14 +738,19 @@ const nav = async (page, name, urlRe) => {
 async function resetViaForm(page) {
   if (!RESET_URL) { console.log('      ⚠ no snapshot + no --reset-url — restore manually from ' + BACKUP_DIR); return; }
   log('RESET', 'roll back via ' + RESET_URL);
-  await page.goto(BASE_URL + RESET_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(BASE_URL + toAppUrl(RESET_URL), { waitUntil: 'domcontentloaded', timeout: 30000 });
   const submit = page.locator('form button[type="submit"], form button').first();
-  await submit.click({ timeout: 3000 }).catch(() => {});
+  // v2.9.4: cursor-visible like every other interaction — click() glides to the
+  // true element first instead of firing an invisible raw locator click.
+  await click(page, submit, 'reset submit').catch(() => {});
   await sleep(3000);
 }
 
 // §4.6 — DB snapshot/restore (v2.6: verify-before-restore, seconds-precision stamp)
-function backupDatabase() {
+// v2.9.3: dbKind (A6 manifest tag: 'sqlite-file' | 'remote' | 'unknown') is
+// passed in by the §7 caller so the no-file warning below can tell a REMOTE
+// database apart from a misconfigured --db-path — see the branch.
+function backupDatabase(dbKind) {
   if (SKIP_BACKUP) { console.log('⚠ --skip-backup: no DB snapshot'); return null; }
   // v2.8: in --no-manage-dev-server mode the script CANNOT stop the
   // externally-owned server, so it cannot take a safe snapshot (the copy
@@ -892,7 +758,19 @@ function backupDatabase() {
   // nor a safe restore. Skip both with an explicit warning instead of doing
   // the unsafe thing silently.
   if (!MANAGE_DEV_SERVER) { console.log('⚠ --no-manage-dev-server: script cannot quiesce the DB (server externally owned) — backup/restore skipped; DB is NOT rolled back'); return null; }
-  if (!DB_PATH || !existsSync(DB_PATH)) { console.log(`⚠ --db-path file missing (${DB_PATH}) — rollback relies on reset form`); return null; }
+  // v2.9.3 DBKIND-AWARE WARNING: 'remote' means the app's data lives in
+  // Turso/libSQL, Postgres, MySQL, Mongo… — there IS no local file, so the
+  // old 'file missing (null)' line was a LIE that sent the operator hunting
+  // for a --db-path that cannot exist (the A6 scan found the remote client,
+  // not a mis-typed flag). sqlite-file/unknown keep the honest path error.
+  if (!DB_PATH || !existsSync(DB_PATH)) {
+    if (dbKind === 'remote') {
+      console.log('⚠ app DB is remote/non-file (Turso/libSQL, Postgres, MySQL, Mongo…) — there is no local file to snapshot; rollback relies on --reset-url or manual action outside this script');
+    } else {
+      console.log(`⚠ --db-path file missing (${DB_PATH}) — rollback relies on reset form`);
+    }
+    return null;
+  }
   mkdirSync(BACKUP_DIR, { recursive: true });
   // v2.6: seconds precision + random suffix. The old minute-precision stamp
   // (slice(0,12)) meant two runs in the same minute silently overwrote each
@@ -992,8 +870,8 @@ async function startDevServer() {
   throw new Error(`dev server did not become ready within ${DEV_READY_TIMEOUT}ms (${BASE_URL + DEV_READY_PATH})`);
 }
 async function stopDevServer() {
-  if (!MANAGE_DEV_SERVER) { console.log('⚠ --no-manage-dev-server: restart your dev server manually before continuing'); return; }
-  if (!devServerProc) return;
+  if (!MANAGE_DEV_SERVER) { console.log('⚠ --no-manage-dev-server: restart your dev server manually before continuing'); return true; }
+  if (!devServerProc) return true;
   const proc = devServerProc;
   const pid = proc.pid;
   log('DEV-SERVER', `stopping pid ${pid}`);
@@ -1001,33 +879,60 @@ async function stopDevServer() {
   // sleep(800) raced Windows handle release: if npm/vite took >800ms to die,
   // restore() copied DB files while the server still held the -shm mmap —
   // exactly the corruption this section exists to prevent.
-  const exited = new Promise((resolve) => {
-    if (proc.exitCode != null || proc.signalCode != null) return resolve();
-    proc.once('exit', resolve);
+  const alive = () => proc.exitCode == null && proc.signalCode == null;
+  const waitExit = (ms) => new Promise((resolve) => {
+    if (!alive()) return resolve(true);
+    const t = setTimeout(() => resolve(!alive()), ms);
+    proc.once('exit', () => { clearTimeout(t); resolve(true); });
   });
-  try {
-    if (process.platform === 'win32') {
-      // npm on Windows wraps the real node/vite process; a plain .kill() on
-      // the npm.cmd pid often leaves the actual server — and its lock on
-      // the DB's -shm file — running. /T kills the whole tree, /F forces it.
-      execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-    } else {
-      process.kill(-pid, 'SIGTERM');                  // negative pid = whole process group (spawned with detached:true above)
-    }
-  } catch (e) { console.log(`      ⚠ stopDevServer: ${e?.message ?? e}`); }
+  const killTree = (force) => {
+    try {
+      if (process.platform === 'win32') {
+        // npm on Windows wraps the real node/vite process; a plain .kill() on
+        // the npm.cmd pid often leaves the actual server — and its lock on
+        // the DB's -shm file — running. /T kills the whole tree, /F forces it.
+        execSync(`taskkill /pid ${pid} /T ${force ? '/F' : ''}`.trim(), { stdio: 'ignore' });
+      } else {
+        process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');   // negative pid = whole process group (spawned with detached:true above)
+      }
+    } catch (e) { console.log(`      ⚠ stopDevServer: ${e?.message ?? e}`); }
+  };
+  killTree(false);
+  // v2.9.3: null our reference immediately so the spawn-time exit handler
+  // stays quiet on the CONFIRMED path — and restore it when the process is
+  // still alive, so startDevServer()'s `if (devServerProc) return;` guard
+  // keeps a later start from double-spawning over the surviving server.
   devServerProc = null;
-  const timeout = sleep(5000).then(() => 'timeout');
-  const result = await Promise.race([exited.then(() => 'exited'), timeout]);
-  if (result === 'timeout') console.log('      ⚠ dev server did not exit within 5s — DB file handles may still be held; restore may fail');
+  if (!(await waitExit(5000))) {
+    devServerProc = proc;
+    console.log('      ⚠ dev server still alive after SIGTERM/taskkill — escalating to force-kill');
+    killTree(true);
+    if (!(await waitExit(5000))) {
+      // v2.9.3 UNCONFIRMED-EXIT REFUSAL: an unconfirmed exit means the DB
+      // handle may STILL be open. Never restore over it — return false so
+      // every restoreDatabaseBackup() call site (§7) skips the copy and
+      // prints a manual instruction instead of racing the very corruption
+      // the bracket exists to prevent.
+      console.error('      ✗ dev server pid ' + pid + ' did NOT exit after force-kill — DB file handles may still be held.\n' +
+        '        SKIPPING DB restore (copying snapshot files over a live DB is what corrupts it).\n' +
+        '        Stop the process manually, then restore from ' + BACKUP_DIR + '.');
+      return false;
+    }
+  }
   await sleep(300);   // small settle AFTER real exit for OS handle bookkeeping
   console.log('      ✓ dev server stopped');
+  return true;
 }
 // INVARIANT: restoreDatabaseBackup() is NEVER called on its own from main()
 // (§7) — every call site does stopDevServer() → restoreDatabaseBackup(stamp)
 // → startDevServer(), in that order, so the DB files are only ever touched
 // while nothing has them open, and the app is always left running
-// afterward. resetViaForm() (§4.5) needs the server UP to navigate, so it
-// only ever runs AFTER startDevServer() has resolved.
+// afterward. v2.9.3: restore is additionally gated on stopDevServer()
+// returning TRUE — a server that survived force-kill still holds the DB
+// open, and copying over it is exactly the corruption this section exists
+// to prevent; the gate refuses and prints a manual-restore instruction.
+// resetViaForm() (§4.5) needs the server UP to navigate, so it only ever
+// runs AFTER startDevServer() has resolved.
 
 ===============================================================================
 5. SWEEP (v2.1: batched census = ONE evaluate; heartbeat-labeled phases)
@@ -1042,11 +947,26 @@ const CLICKABLE = [
 // `[data-expandable]` — a row that expands purely from a row-level click
 // handler (no inner button, no data-expandable attribute) still needs to be
 // censused, or it and everything it reveals on expand are never probed.
-// Extend this with any target-app-specific "delete/void/etc" words found in
-// the scanned codebase (§1 A7) instead of hardcoding a fixed language list.
+// v2.9.2: nothing in Phase A actually scans the target codebase for
+// destructive vocabulary — A7 (§1) only measures select/dialog/details
+// density. Treat the list below as a FIXED, best-effort, English-only guard
+// that catches common destructive verbs and NOTHING app-specific — a button
+// labeled "Terminate", "Publish", "Send Invoice" or a domain jargon term
+// will sail through untouched unless added here by hand after reading the
+// app's own action/button labels. This list is a second, imperfect line of
+// defense; the DB snapshot/restore bracket (§4.6/§4.7, gated in §7) is the
+// actual safety mechanism — do not rely on wording alone to make a sweep
+// safe against a database you can't roll back.
 // v2.6: word-boundary anchored. The old substring regex skipped any control
 // containing "avoid" (A|VOID) in its label — a false destructive skip.
-const DESTRUCTIVE = /\b(void|delete|remove|drop|purge|reset|disable|log ?out|sign ?out)\b/i;
+// v2.9.2: widened beyond the original accounting-flavored list (void, purge,
+// drop) to cover common SaaS/CRUD destructive verbs — trading a little sweep
+// exhaustiveness for safety. Does not affect closeModal()'s dismiss-button
+// matching, which is a separate literal-text code path.
+// v2.9.4: bare `cancel` narrowed — a plain "Cancel" button only dismisses its
+// dialog (closeModal's own literal path, always safe to click) and must stay
+// sweepable; only "Cancel <thing>" (plan/subscription/…) destroys something.
+const DESTRUCTIVE = /\b(void|delete|remove|drop|purge|reset|disable|log ?out|sign ?out|cancel[- ]?(plan|subscription|membership|order|booking|account|service|invoice)|terminate|suspend|ban|revoke|archive|deactivate|unsubscribe|discard|wipe|clear|empty|refund|charge|downgrade)\b/i;
 const visited = new Set(); const routeQueue = new Set();
 // v2.8: monotonically increasing census id — census() seeds its in-page
 // counter with this and advances it by the ids it issues, so ids stay unique
@@ -1081,13 +1001,6 @@ async function census(page, rootSel) {
     // 3s click-failed timeout per element). Old tags on replaced DOM nodes
     // are inert — no id ever gets reused.
     let cid = cidBase;   // seeded from module CID_SEQ — unique across passes
-    // v2.8: NO WIPE. Ids are globally unique now (CID_SEQ base + monotonic),
-    // so re-tagging can never collide with a previous pass's tags — while a
-    // wipe here STRIPS tags from elements an in-flight caller batch still
-    // holds locators for (probe()'s recursive modal/row census did exactly
-    // that: it invalidated the parent batch's remaining locators, burning a
-    // 3s click-failed timeout per element). Old tags on replaced DOM nodes
-    // are inert — no id ever gets reused.
     const out = []; const seen = new Set();
     for (const sel of sels) {
       let i = 0;
@@ -1160,7 +1073,6 @@ async function census(page, rootSel) {
     // 'data-replay-cid' is present in census's source.
     .map((d) => ({ ...d, loc: page.locator(`[data-replay-cid="${d.cid}"]`) }));
   console.log(`      [census] ${els.length} elements (${els[0]?.scope ?? 'page'} scope) in ${Date.now() - t0}ms`);
-  console.log(`      [census] ${els.length} elements in ${Date.now() - t0}ms`);
   return els;
 }
 // v2.8: key carries the real census scope (modal/dropdown/page — v2.6's
@@ -1181,28 +1093,43 @@ const dedupKey = (page, el) => page.url() + '|' + (el.scope ?? 'page') + '|' + e
 // 'S'-prefixed ids can never collide with census-issued numeric ids.
 const resolveFresh = async (page, el) => {
   if (await page.locator(`[data-replay-cid="${el.cid}"]`).count()) return el;   // tag still live
-  const hit = await page.evaluate(({ sel, text, tid, title, aria, href, nextId }) => {
+  // v2.8.4 SCOPE-PRESERVING RECOVERY: the re-search MUST use the same root
+  // census() would have used for this element's scope — recovery must never
+  // become the back door that reintroduces the "clicked the button BEHIND
+  // the modal" bug (a document-wide search would match a background control
+  // that happens to share the selector + text of the modal child we lost).
+  // Matching is EXACT-text (normalize whitespace only) — v2.8.3's substring
+  // `includes` matched "Save Draft" while hunting for "Save".
+  const rootSel = el.scope === 'modal' ? 'dialog[open], .modal-open'
+    : el.scope === 'dropdown' ? DROPDOWN_SEL : null;
+  const hit = await page.evaluate(({ sel, text, tid, title, aria, href, nextId, rootSel }) => {
+    const root = rootSel ? document.querySelector(rootSel) : document;
+    if (rootSel && !root) return null;          // scope closed/gone — genuinely gone
     const norm = (s) => (s ?? '').trim().replace(/\s+/g, ' ');
-    for (const n of document.querySelectorAll(sel)) {
+    for (const n of root.querySelectorAll(sel)) {
       if (n.getAttribute('data-replay-cid') != null) continue;   // never steal another element's tag
       if (tid && n.getAttribute('data-testid') !== tid) continue;
       if (href && n.getAttribute('href') !== href) continue;
       if (title && n.getAttribute('title') !== title) continue;
       if (aria && n.getAttribute('aria-label') !== aria) continue;
-      if (text && !norm(n.innerText).includes(text)) continue;
+      if (text && norm(n.innerText) !== text) continue;          // EXACT normalized text
       if (!(tid || href || title || aria || text)) continue;     // no identity to match on
       const id = 'S' + nextId;
       n.setAttribute('data-replay-cid', id);
       return id;
     }
     return null;
-  }, { sel: el.sel, text: el.text, tid: el.tid ?? null, title: el.title ?? null, aria: el.aria ?? null, href: el.href ?? null, nextId: CID_SEQ + 1 }).catch(() => null);
+  }, { sel: el.sel, text: el.text, tid: el.tid ?? null, title: el.title ?? null, aria: el.aria ?? null, href: el.href ?? null, nextId: CID_SEQ + 1, rootSel }).catch(() => null);
   if (!hit) return null;
   CID_SEQ++;
   return { ...el, cid: hit, loc: page.locator(`[data-replay-cid="${hit}"]`) };
 };
-const fingerprint = (page) => page.evaluate(() => ({
-  url: location.pathname + location.search,
+const fingerprint = (page) => page.evaluate((hashRoutes) => ({
+  // v2.9: hash-routed SPAs carry the route in the fragment (pathname is
+  // constant '/'), so the hash IS part of the route identity there. Path-
+  // routed apps keep the v2.7 shape — a bare '#anchor' scroll must not
+  // count as navigation.
+  url: location.pathname + location.search + (hashRoutes ? location.hash : ''),
   dlg: document.querySelectorAll('dialog[open], .modal-open').length,
   rows: document.querySelectorAll('tbody tr').length,
   open: document.querySelectorAll('details[open]').length,
@@ -1212,7 +1139,7 @@ const fingerprint = (page) => page.evaluate(() => ({
   // state-toggled accordions (a div + aria-expanded, no <details> at all).
   openVec: [...document.querySelectorAll('details')].map((d) => (d.open ? 1 : 0)).join(''),
   ariaExp: document.querySelectorAll('[aria-expanded="true"]').length,
-}));
+}), HASH_ROUTES);
 async function probe(page, el, depth, report) {
   if (C.clicks >= MAX_CLICKS || depth > 6) return;
   const k = dedupKey(page, el);
@@ -1223,7 +1150,16 @@ async function probe(page, el, depth, report) {
   const fp = await fingerprint(page);
   C.clicks++;
   if (el.tag === 'select') {
-    const before = await el.loc.inputValue().catch(() => null);
+    // v2.8.4: selects resolve through resolveFresh too — this branch used to
+    // run BEFORE it, so an orphaned select tag hit the pre-v2.8.3 failure
+    // mode: el.loc.inputValue() with NO explicit timeout (the only such call
+    // left in the file, violating the v2.4 rule) burned ~30s, then the run
+    // silently reported select-enumerated (0 options).
+    const selEl = await resolveFresh(page, el);
+    if (!selEl) { rec.result = 'click-failed: select gone after re-render'; report.push(rec); return; }
+    const loc = selEl.loc;
+    const before = await loc.inputValue({ timeout: 1500 }).catch(() => null);
+    if (before === null) { rec.result = 'click-failed: select unresolvable'; report.push(rec); return; }
     // v2.6: read REAL option values/labels — the old selectOption(i) passed a
     // numeric index, which Playwright treats as an option VALUE, so any select
     // whose values aren't "1","2",… threw (30s default timeout each, behind a
@@ -1234,15 +1170,15 @@ async function probe(page, el, depth, report) {
       const el = document.querySelector(`[data-replay-cid="${cidEl}"]`);
       if (!el) return [];
       return [...el.querySelectorAll('option')].map((o) => ({ value: o.value, label: (o.textContent ?? '').trim() }));
-    }, el.cid);
+    }, selEl.cid);
     if (DEEP_SELECTS) {
       for (const o of options) {
         if (o.value === before) continue;
         if (DESTRUCTIVE.test(`${o.label} ${o.value}`) && !ALLOW_DESTRUCTIVE) { console.log(`      ⚠ skip destructive option "${o.label}"`); continue; }
-        await el.loc.selectOption(o.value, { timeout: 1500 }).catch(() => {}); await sleep(P.post);
+        await loc.selectOption(o.value, { timeout: 1500 }).catch(() => {}); await sleep(P.post);
       }
     }
-    if (before !== null) await el.loc.selectOption(before, { timeout: 1500 }).catch(() => {});
+    await loc.selectOption(before, { timeout: 1500 }).catch(() => {});
     rec.result = `select-enumerated (${options.length} options)`; report.push(rec); return;
   }
   // §8 promised "retry-once after settle on click failure" — v2.5 never
@@ -1252,13 +1188,29 @@ async function probe(page, el, depth, report) {
   // 3s timeouts and recording click-failed for a visible element.
   let clickErr = null;
   const fresh = await resolveFresh(page, el);
-  if (!fresh) { rec.result = 'click-failed: element gone after re-render'; report.push(rec); return; }
+  // v2.9 BATCH-ABORT ON EVAPORATION: resolveFresh null means the element is
+  // genuinely absent from its scope root. One gone element usually means a
+  // state-changing click re-rendered the container (unkeyed {#each} lists,
+  // collapsed expansion panels) and the REST of this census batch is dead
+  // too — recording each remaining tag as click-failed produced 96 noise
+  // records on one demo page while the sweep ground through them. Return
+  // the same batch-abort signal the v2.7.1 stale-census path uses: the
+  // caller re-censuses, dedup + fresh tags pick up whatever is really
+  // there now. The record still notes the evaporation honestly.
+  if (!fresh) { rec.result = 'click-failed: element gone after re-render (batch-abort)'; report.push(rec); return 'navigated'; }
+  // v2.8.4: capture whichever locator ACTUALLY got clicked — recovery can
+  // hand back a re-tagged element, and every post-click follow-up below
+  // (modal-opener re-click, row collapse, details collapse) must drive the
+  // SAME node the sweep interacted with, not the possibly-dead el.loc
+  // (a silent no-op here strands legacy checkbox-hack modals whose only
+  // close path is re-clicking the toggle).
+  let clickedLoc = fresh.loc;
   try { await click(page, fresh.loc, 'sweep: ' + (el.text || el.sel)); }
   catch (e) {
     clickErr = e;
     await sleep(P.settle);
     const fresh2 = await resolveFresh(page, el);   // re-render may have happened between attempts
-    if (fresh2) { try { await click(page, fresh2.loc, 'sweep retry: ' + (el.text || el.sel)); clickErr = null; } catch (e2) { clickErr = e2; } }
+    if (fresh2) { try { await click(page, fresh2.loc, 'sweep retry: ' + (el.text || el.sel)); clickErr = null; clickedLoc = fresh2.loc; } catch (e2) { clickErr = e2; } }
   }
   if (clickErr) { rec.result = 'click-failed: ' + String(clickErr?.message ?? clickErr).slice(0, 160); report.push(rec); return; }
   if (await page.locator('dialog[open], .modal-open').count()) {
@@ -1275,17 +1227,17 @@ async function probe(page, el, depth, report) {
     // for the remainder of the route. Never auto-clicks OK/Yes/Confirm —
     // "confirming" an unknown dialog may EXECUTE a destructive action, which
     // is what the DESTRUCTIVE guard exists to prevent.
-    if ((await closeModal(page, el.loc)) === 'stuck') {
+    if ((await closeModal(page, clickedLoc)) === 'stuck') {
       // One unclosable modal must never trap the sweep. Dialog state is
       // client-side — a reload of the route clears it. Record + abort the
       // batch (tags may be stale after re-render); caller re-censuses.
       rec.result = 'modal-opened (modal-stuck-reload)'; report.push(rec);
-      await page.goto(BASE_URL + fp.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      await page.goto(BASE_URL + toAppUrl(fp.url), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
       await settleHydration(page);
       return 'navigated';
     }
   } else if (el.sel.includes('tbody tr')) {
-    const panel = el.loc.locator('xpath=following-sibling::tr[1]');
+    const panel = clickedLoc.locator('xpath=following-sibling::tr[1]');
     if (await panel.isVisible().catch(() => false)) {
       rec.result = 'row-expanded';
       for (const child of await census(page)) { if ((await probe(page, child, depth + 1, report)) === 'navigated') return 'navigated'; }
@@ -1294,13 +1246,18 @@ async function probe(page, el, depth, report) {
       // row whose buttons are [Edit] [Delete] hits EDIT — an arbitrary action,
       // not a toggle (reproduced). The row was what we clicked to expand;
       // the row is what we click to collapse. Escape covers sticky panels.
-      await el.loc.click({ timeout: 1500 }).catch(async () => { await page.keyboard.press('Escape').catch(() => {}); });
+      // v2.8.4: collapse drives clickedLoc — the row we ACTUALLY clicked.
+      await clickedLoc.click({ timeout: 1500 }).catch(async () => { await page.keyboard.press('Escape').catch(() => {}); });
     }
   } else {
     const fp2 = await fingerprint(page);
     if (fp2.url !== fp.url) {
       rec.result = 'navigated → ' + fp2.url;
-      if (!fp2.url.startsWith('/login')) routeQueue.add(fp2.url);
+      // v2.9.4: queue route-shaped discoveries only — a bare '#anchor' scroll
+      // on a hash app normalizes to 'section' (no leading slash); queuing it
+      // would sweep BASE_URL + '#section' as if it were a route.
+      const docUrl = toDocUrl(fp2.url);
+      if (docUrl.startsWith('/') && !docUrl.startsWith('/login')) routeQueue.add(docUrl);
       // v2.8.1 (found live on saftbg): this branch used to `return
       // 'navigated'` WITHOUT pushing rec — on a link-heavy app (most clicks
       // navigate) nearly every record was silently dropped and coverage
@@ -1312,7 +1269,7 @@ async function probe(page, el, depth, report) {
       // navigated-to page — every subsequent probe then runs against the
       // wrong route. Verify we actually made it back; hard-goto if not.
       const back = await fingerprint(page);
-      if (back.url !== fp.url) await page.goto(BASE_URL + fp.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      if (toDocUrl(back.url) !== toDocUrl(fp.url)) await page.goto(BASE_URL + toAppUrl(fp.url), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
       await settleHydration(page);
       // v2.7.1 STALE-CENSUS SIGNAL (found live on saftbg): the navigation
       // re-rendered the route — Svelte replaced the DOM nodes census() had
@@ -1336,8 +1293,8 @@ async function probe(page, el, depth, report) {
       rec.result = 'details-expanded';
       for (const child of await census(page)) { if ((await probe(page, child, depth + 1, report)) === 'navigated') return 'navigated'; }
       // Close it by re-clicking the summary (the toggle), not Escape —
-      // Escape doesn't close <details>.
-      await el.loc.click({ timeout: 1500 }).catch(() => {});
+      // Escape doesn't close <details>. v2.8.4: drives clickedLoc.
+      await clickedLoc.click({ timeout: 1500 }).catch(() => {});
     }
     else if (fp2.rows > fp.rows) { rec.result = 'rows-revealed'; for (const child of await census(page)) { if ((await probe(page, child, depth + 1, report)) === 'navigated') return 'navigated'; } }
   }
@@ -1352,7 +1309,7 @@ async function probe(page, el, depth, report) {
     // stray navigation the goBack branch missed) — never leave the sweep in
     // a dirty state; reload the route and abort the batch.
     rec.result += ' (state-unclean-reload)'; report.push(rec);
-    await page.goto(BASE_URL + fp.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    await page.goto(BASE_URL + toAppUrl(fp.url), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
     await settleHydration(page);
     return 'navigated';
   }
@@ -1360,7 +1317,7 @@ async function probe(page, el, depth, report) {
 }
 async function sweepRoute(page, url, report) {
   PHASE = 'sweep goto ' + url;
-  await page.goto(BASE_URL + url, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await page.goto(BASE_URL + toAppUrl(url), { waitUntil: 'domcontentloaded', timeout: 25000 });
   await settleHydration(page);                       // once per navigation ONLY
   // v2.8 DROPDOWN-SCOPED CENSUS: v2.6 hovered + censused per parent, but
   // census() scoped only to a MODAL — a hover-opened dropdown isn't one, so
@@ -1407,7 +1364,14 @@ function writeCoverage(report) {
     r.result === 'row-expanded' || r.result === 'rows-revealed' || r.result === 'dropdown-opened' ||
     r.result === 'details-expanded' || r.result.startsWith('navigated');
   const byResult = {};
-  for (const r of report) { const key = r.result.split(' ')[0].split('→')[0].trim(); byResult[key] = (byResult[key] ?? 0) + 1; }
+  // v2.9.4: stuck/unclean reloads keep their own breakdown keys — folding them
+  // into 'modal-opened'/'clicked' hid the modals that trapped the sweep.
+  for (const r of report) {
+    const key = r.result.includes('modal-stuck-reload') ? 'modal-stuck-reload'
+      : r.result.includes('state-unclean-reload') ? 'state-unclean-reload'
+      : r.result.split(' ')[0].split('→')[0].trim();
+    byResult[key] = (byResult[key] ?? 0) + 1;
+  }
   const stats = { routes: new Set(report.map((r) => r.route)).size, elements: report.length,
     clicked: report.filter(CLICK_RESULTS).length,
     'skipped-destructive': report.filter((r) => r.result === 'skipped-destructive').length,
@@ -1424,12 +1388,15 @@ function writeCoverage(report) {
 ===============================================================================
 6. PARAM RESOLUTION + WARM-UP
 ===============================================================================
-resolveParam(route, cid): 1) PARAM_OVERRIDES[name]; 2) cid if known;
+resolveParam(route, cid): 1) PARAM_OVERRIDES[name] (run-time --param wins over
+generator-baked MANIFEST.params); 2) --company for :cid/:companyId/:company;
 3) live: goto nearest param-less prefix, read first a[href] matching the route
 shape — if the prefix yields nothing (commonly a 404 or an index-less
 section), retry the scan on each HUB_ROUTES page (§4.1: entity hubs like
 /companies link to /<section>/:id routes);
-else return null → record {route, result:'skipped-unresolvable'}.
+else return null → the §7 seed logs `skipped-unresolvable` for the route
+and does not queue it (an unresolvable route never runs, so it produces no
+coverage record).
 This MUST be implemented as an actual named function `resolveParam` — it is
 now part of the --selftest wiring check (§7), so a generated script that
 only describes this logic in a comment will fail --selftest instead of
@@ -1437,10 +1404,32 @@ silently shipping with unresolvable dynamic routes.
 
 // §6.1 — resolveParam (embedded — copy verbatim; MANIFEST generated by Phase A)
 // Resolve dynamic route params to concrete ids. Order: explicit --param
-// override → known company id → live discovery (visit the nearest
+// override (run-time --param wins over generator-baked MANIFEST.params) →
+// --company id for :cid/:companyId/:company params → live discovery (visit
+// the nearest
 // param-less prefix and read the first in-app link whose href matches the
 // route's shape). Returns the filled route path, or null when unresolvable
-// (caller records { route, result: 'skipped-unresolvable' }).
+// (the §7 seed logs 'skipped-unresolvable' and does not queue the route).
+// v2.9.3 SHARED HREF SCANNER (used by the prefix scan and the hub fallback):
+// visit the current page and return the first in-app href that extends the
+// route prefix with at least one concrete segment. Hash-SPA links carry the
+// route in the fragment ('#/docs/7/view/3') — strip the leading '#/' when
+// HASH_ROUTES so discovery works there too; path apps' '/x' hrefs pass
+// through untouched and a bare '#anchor' is never a route (still excluded).
+const scanRouteHrefs = async (page, prefix) => {
+  const href = await page.evaluate((arg) => {
+    const pref = arg.prefix;
+    const esc = pref.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const re = new RegExp('^' + esc + '/[^/]+(/.*)?$');
+    for (const a of document.querySelectorAll('a[href]')) {
+      let h = a.getAttribute('href') ?? '';
+      if (arg.hashRoutes && h.startsWith('#/')) h = h.slice(1);   // hash-SPA link → route string
+      if (h.startsWith('/') && !h.startsWith('//') && re.test(h)) return h;
+    }
+    return null;
+  }, { prefix, hashRoutes: HASH_ROUTES }).catch(() => null);
+  return href;
+};
 async function resolveParam(page, route) {
   // route like '/invoices/:id/edit' — fill each :param left to right.
   const parts = route.split('/').filter(Boolean);
@@ -1454,20 +1443,12 @@ async function resolveParam(page, route) {
     // live discovery: the param-less prefix already filled so far is where
     // app links to this route live — visit it and scan in-app hrefs.
     const prefix = '/' + out.join('/');
-    await page.goto(BASE_URL + (prefix === '/' ? '' : prefix), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    await page.goto(BASE_URL + toAppUrl(prefix === '/' ? '' : prefix), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
     await settleHydration(page);
     // href must extend the prefix with at least one concrete segment:
     // prefix '/invoices' + shape ':id(/edit)' matches '/invoices/42' or
     // '/invoices/42/edit' — never '/invoices' itself.
-    const href = await page.evaluate((pref) => {
-      const esc = pref.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      const re = new RegExp('^' + esc + '/[^/]+(/.*)?$');
-      for (const a of document.querySelectorAll('a[href]')) {
-        const h = a.getAttribute('href') ?? '';
-        if (h.startsWith('/') && !h.startsWith('//') && re.test(h)) return h;
-      }
-      return null;
-    }, prefix).catch(() => null);
+    const href = await scanRouteHrefs(page, prefix);
     // v2.8.1 HUB FALLBACK (found live on saftbg): many apps don't link to
     // '/<segment>/:id' pages from a '/<segment>' index — the links live on
     // an ENTITY HUB (e.g. /companies links to /dashboard/:company_id,
@@ -1480,26 +1461,35 @@ async function resolveParam(page, route) {
     if (!href2) {
       for (const hub of HUB_ROUTES) {
         if (hub === prefix) continue;
-        await page.goto(BASE_URL + hub, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await page.goto(BASE_URL + toAppUrl(hub), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
         await settleHydration(page);
-        href2 = await page.evaluate((pref) => {
-          const esc = pref.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          const re = new RegExp('^' + esc + '/[^/]+(/.*)?$');
-          for (const a of document.querySelectorAll('a[href]')) {
-            const h = a.getAttribute('href') ?? '';
-            if (h.startsWith('/') && !h.startsWith('//') && re.test(h)) return h;
-          }
-          return null;
-        }, prefix).catch(() => null);
+        href2 = await scanRouteHrefs(page, prefix);
         if (href2) break;
       }
     }
     if (!href2) return null;
-    const segs = href2.split('/').filter(Boolean);
-    const known = out.length;                 // segments already filled
-    const take = segs.length - known;         // concrete segments the link reveals
-    if (take < 1) return null;
-    out.push(...segs.slice(known));           // fill this (and any later) :params at once
+    // v2.9.3 POSITIONAL FILL (fix): pushing every concrete tail segment of
+    // the matched href, then letting the loop append the route's later
+    // static parts, DOUBLE-PUSHED them — a link '/invoices/42/edit' resolving
+    // '/invoices/:id/edit' produced '/invoices/42/edit/edit', and interleaved
+    // statics ('/docs/:a/view/:b' from an exact '/docs/7/view/3' link)
+    // misaligned the walk and returned null. Walk the href tail positionally
+    // against the route's remaining parts: each segment lands in `out` and
+    // every static part must EQUAL its tail segment — a shorter href
+    // ('/invoices/42' for '/invoices/:id/edit') ends the walk early and the
+    // loop below appends the trailing statics; a mismatch means the link is
+    // a different route ('/invoices/42/print'), so return null rather than
+    // fabricate a URL under this route's label.
+    const tail = href2.split('/').filter(Boolean).slice(out.length);
+    let ti = 0;
+    for (let j = idx; j < parts.length && ti < tail.length; j++) {
+      const seg = tail[ti];
+      if (!parts[j].startsWith(':') && seg !== parts[j]) return null;   // shape mismatch — not this route
+      out.push(seg);
+      ti++;
+    }
+    if (ti < tail.length) return null;         // leftover concrete segments — not this route
+    idx += ti - 1;                             // skip the parts the walk already consumed
   }
   return '/' + out.join('/');
 }
@@ -1508,18 +1498,18 @@ concreteRoutes = every static (param-less) manifest route, plus every dynamic
 route for which resolveParam() returned a non-null id for each of its params.
 Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   for (const r of concreteRoutes.slice(0, 60)) { PHASE = 'warm ' + r;
-    await page.goto(BASE_URL + r, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    await page.goto(BASE_URL + toAppUrl(r), { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
     console.log('      [warm] ' + r); }
 
 ===============================================================================
 7. main() PLUMBING
 ===============================================================================
 - Immediately after the PARTS array (empty by default) is declared:
-    const UNTIL = UNTIL_ARG != null ? (parseInt(UNTIL_ARG, 10) || PARTS.length) : PARTS.length;
-  (See §3 CRITICAL note — never slice with UNTIL_ARG directly. The
-  `|| PARTS.length` also catches `--until abc` → NaN, which plain parseInt
-  propagates into slice(0, NaN) = zero parts — v2.5's own derivation had
-  exactly this hole.)
+    if (UNTIL_ARG != null && !Number.isFinite(parseInt(UNTIL_ARG, 10))) { console.error('✗ invalid --until "' + UNTIL_ARG + '" (expected a number)'); process.exit(2); }
+    const UNTIL = UNTIL_ARG != null ? parseInt(UNTIL_ARG, 10) : PARTS.length;
+  (See §3 CRITICAL note — never slice with UNTIL_ARG directly. Absent means
+  all parts; `0` is honored ("run none"). v2.9.3's `|| PARTS.length` turned
+  `--until 0` into "run all" and masked non-numeric typos as defaults.)
 - --selftest: assert typeof === 'function' for [glide,click,type,fill,pickSelect,
   pickSelectContains,toast,census,probe,sweepRoute,nav,backupDatabase,
   restoreDatabaseBackup,resetViaForm,fingerprint,center,settleHydration,
@@ -1532,7 +1522,11 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   click.toString(), type.toString(), fill.toString(), pickSelect.toString(),
   pickSelectContains.toString() contains 'glide(' — this is what guarantees
   the recorded cursor actually tracks every interaction rather than just
-  existing as an unused overlay; BEHAVIORAL assertions (v2.6 — source
+  existing as an unused overlay; v2.9.1: ALSO assert click.toString()
+  contains 'evaluateHandle' — the element-anchored dispatch contract (the
+  real input event resolves the target node at the last possible moment
+  instead of clicking glided-at coordinates) is a load-bearing guarantee,
+  not an implementation detail; BEHAVIORAL assertions (v2.6 — source
   substrings alone passed while the mechanism was broken downstream):
   assert census.toString() contains 'data-replay-cid' AND 'cidBase' AND
   'scope' — proves census resolves locators through the unique per-element
@@ -1544,26 +1538,96 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   assert restoreDatabaseBackup.toString() contains 'REFUSING TO RESTORE' —
   proves the verify-main-backup-before-touching-live-files guard exists;
   assert backupDatabase.toString() contains 'slice(0, 14)' — proves the
-  seconds-precision stamp; print PASS/FAIL; process.exitCode =
-  missing.length ? 1 : 0; return WITHOUT launching a browser.
-- await startDevServer();  (§4.7 — before the browser launches: the crawl
-  needs BASE_URL reachable and login happens inside it.)
-- v2.8 BACKUP BRACKET (safety-critical ordering — do NOT "optimize" away):
-    await stopDevServer();
-  const stamp = backupDatabase();
+  seconds-precision stamp; v2.9.3: AND 'dbKind' — proves the kind-aware
+  no-file warning (remote ≠ misleading 'file missing (null)') lives in the
+  function, not just in prose; v2.9.2: assert main.toString() (or the module
+  source, if main isn't independently stringifiable) contains
+  'i-accept-no-db-rollback' — proves the no-rollback gate is wired into the
+  actual run path, not just described in a comment; v2.9.3: AND 'runIsInert'
+  — proves the scripted-mode exemption is real code, same rigor as every
+  other safety-critical property checked here; v2.9.4: assert
+  teardown.toString() contains 'Promise.race' — proves the close-watchdog is
+  a real race, not a post-await flag check; AND NOT DESTRUCTIVE.test('Cancel')
+  — proves a bare Cancel button stays sweepable (only "Cancel <thing>" is
+  destructive); print PASS/FAIL;
+  process.exitCode = missing.length ? 1 : 0; return WITHOUT launching a
+  browser.
+- v2.8 BACKUP BRACKET + v2.9.3 QUIESCE GATE (safety-critical ordering — do
+  NOT "optimize" away): stopDevServer() returns true ONLY when the child's
+  exit was CONFIRMED (it escalates SIGTERM → SIGKILL / second taskkill /F
+  first, §4.7). The bracket aborts BEFORE the sweep when quiesce fails —
+  sweeping with no snapshot means mutations with no way back:
     await startDevServer();
+    const quiesced = await stopDevServer();
+    if (!quiesced) { console.error('✗ cannot quiesce the dev server — ABORTING before any sweep (no safe snapshot)'); process.exit(1); }
+  const dbKind = MANIFEST.db?.kind ?? 'unknown';   // v2.9.3: hoisted BEFORE the backup so backupDatabase() prints the dbKind-aware warning
+  const stamp = backupDatabase(dbKind);
+    await startDevServer();
+  The FIRST startDevServer() is the §4.7 port preflight: it aborts the run
+  if a server this script does not own already occupies BASE_URL, so the
+  bracket below can never be voided by a stale external process. It also
+  proves the dev command CAN start before we depend on it. stopDevServer()
+  then quiesces (releasing the .db/-wal/-shm handles) for the copy.
   backupDatabase() does three SEPARATE copyFileSync calls on the live
   .db/-wal/-shm files. With the server still running, a write landing
   mid-copy yields a torn snapshot — the exact unsynchronized multi-file copy
   of an open DB that §4.6's whole design exists to prevent on restore. The
   snapshot must capture a quiescent DB: server STOPPED during the copy,
-  restarted after. (startDevServer() runs before the browser launches, so
-  login/sweep still see a reachable app.)
+  restarted after. The final startDevServer() brings the app up before the
+  browser launches, so login/sweep still see a reachable app. (Do not
+  "simplify" the first start/stop pair away: without the preflight-then-
+  quiesce sequence, a stale external server satisfies the bracket's own
+  readiness checks while still holding the DB.)
+- v2.9.2 NO-ROLLBACK GATE (immediately after the bracket above, BEFORE
+  chromium.launch(); v2.9.3: message branches on MANIFEST.db.kind so a
+  remote/non-file DB gets a specific warning instead of the generic
+  'file missing' wording, and runIsInert exempts authored-only scripted
+  runs — see the scope note after the snippet):
+    const runIsInert = MODE_RUN === 'scripted';   // v2.9.3: authored PARTS-only run — never drains the route queue (§ MODE below)
+    if (!runIsInert && !stamp && !RESET_URL && !NO_ROLLBACK_ACK) {
+      console.error('✗ ABORT: no DB snapshot could be taken (' +
+        (dbKind === 'remote' ? "the app's database is remote/non-file (Turso/libSQL, Postgres, MySQL, Mongo…) — there is no local file to snapshot"
+          : dbKind === 'sqlite-file' ? 'the local SQLite file backup failed, was skipped, or the file is missing'
+          : 'no local SQLite file was found (--db-path)') +
+        ') and no --reset-url was given. The sweep is about to submit forms ' +
+        'and fire every +page.server.ts action it finds, with no automatic ' +
+        'way to undo it. Either point --db-path at the local SQLite file the ' +
+        'dev server actually uses, pass --reset-url to a route that restores ' +
+        'known-good data, run this against a disposable copy/branch of the ' +
+        'database instead of one you care about, or pass ' +
+        '--i-accept-no-db-rollback to proceed anyway.');
+      process.exitCode = 1; process.exit(1);
+    }
+  Placed AFTER the bracket's own final startDevServer(), never before —
+  aborting here still leaves the dev server running for the user (the
+  invariant §8 states for every other exit path), only the browser/sweep is
+  withheld. `stamp` alone is not sufficient to gate on: `!stamp` is also true
+  right after a successful `--skip-backup` run, which is why RESET_URL and
+  NO_ROLLBACK_ACK are both checked too — an explicit skip is not the same as
+  an explicit "I accept the run is unrecoverable."
+- v2.9.3 GATE-SCOPE (runIsInert, the ONLY exemption): MODE routing is what
+  makes it sound — a `--mode scripted` run never drains the route queue, so
+  the only things it fires are the PARTS the operator hand-wrote (plus
+  login); the exhaustive-sweep rationale ('submit forms and fire every
+  action it finds') simply does not apply, and forcing
+  --i-accept-no-db-rollback onto a hand-authored recording on a remote-DB
+  app (the demo-recording use case) was over-blocking. `--mode sweep` and
+  `--mode both` always drain the queue and are NOT exempt, and neither is a
+  logged-out SPA public-surface sweep: public pages routinely carry signup /
+  contact / newsletter forms whose POSTs mutate a remote DB with no local
+  file to snapshot — exactly the no-rollback case this gate exists for. If
+  you want a public sweep against live data, pass --i-accept-no-db-rollback
+  or --reset-url, or point the run at a disposable copy of the data.
 - process.on('SIGINT', () => {
     // try/catch/finally: v2.5 had none — a stopDevServer() throw skipped the
     // restore AND skipped the exit, leaving a hung process with a mutated DB.
+    // v2.9.3: restore runs ONLY when stopDevServer() confirmed the exit.
     (async () => {
-      try { await stopDevServer(); restoreDatabaseBackup(stamp); await startDevServer(); }
+      try {
+        const quiesced = await stopDevServer();
+        if (quiesced) restoreDatabaseBackup(stamp);
+        await startDevServer();
+      }
       catch (e) { console.error('SIGINT rollback failed:', e?.message ?? e); }
       finally { process.exit(130); }
     })();
@@ -1580,13 +1644,33 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   page.on('console'): forward [debug-*] lines.
 - login ×3 with scanned selectors (via type()/click(), so the login flow is
   gliding and cursor-visible too — never bypass the helpers here even though
-  it happens before the main sweep). Select company (--company or first card).
-- MODE scripted/both → PARTS.slice(FROM, UNTIL); MODE sweep/both → warm-up +
-  drain routeQueue (seed: manifest routes resolved via resolveParam +
-  NAV_TREE hrefs + /companies cards; cap 60; 401/403 → skipped-forbidden).
-- END: writeCoverage(report); await stopDevServer(); const restored =
-  restoreDatabaseBackup(stamp); await startDevServer(); rollback = restored
-  || (await resetViaForm(page)) || manual hint. SAME in catch. Print stack
+  it happens before the main sweep) — SKIPPED ENTIRELY when MANIFEST.login
+  is null or --no-login was passed (v2.9; SPA apps with no login flow, or
+  deliberate logged-out sweeps).
+- MODE routing — v2.9.3 FIX: the emitted main() previously drained the
+  route queue in EVERY mode, so `--mode scripted` fired the whole exhaustive
+  sweep behind the operator's back (contradicting this bullet) and the
+  no-rollback gate blocked authored recordings that would never sweep.
+  main() now gates the warm-up + drain on MODE !== 'scripted':
+  MODE sweep/both → warm-up + drain. The queue is seeded from EVERY MANIFEST
+  route — static ones as-is, dynamic ones filled via resolveParam
+  (unresolvable ones are logged skipped-unresolvable and not queued) — then
+  capped at 60. Each queued route is visited TWICE: once in the warm-up pass
+  (goto + `[warm]` log, pre-triggering the cold SSR compile) and once by
+  sweepRoute(), whose in-page census/probe recursion reaches everything on
+  that route (NAV_TREE destinations, entity-hub cards, revealed children —
+  every +page.svelte is a manifest route, so the queue is the complete route
+  surface). A sweepRoute failure is recorded route-failed and the run
+  continues.
+  MODE scripted/both → PARTS.slice(FROM, UNTIL). A pure `--mode scripted`
+  run therefore executes ONLY the hand-authored PARTS (plus login) — which
+  is exactly why the no-rollback gate exempts it via runIsInert (above).
+- END: writeCoverage(report); const stopped = await stopDevServer(); const
+  restored = stopped && restoreDatabaseBackup(stamp); await
+  startDevServer(); rollback = restored || (await resetViaForm(page)) ||
+  manual hint. SAME in catch — both gate restore on the confirmed stop
+  (v2.9.3: never copy snapshot files over a server that survived
+  force-kill). Print stack
   BEFORE closing the browser; process.exitCode = 1; NEVER process.exit()
   (except SIGINT and the teardown watchdog). browser.close() MUST go through
   teardown(browser) (§4.3) — v2.7.1: a sweep that opened dialogs/popups can
@@ -1605,7 +1689,17 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
 ===============================================================================
 - Hydration: settleHydration once per navigation; retry-once after settle on
   click failure. Toasts: waitToastClear before nav; toast() logs ✓/⚠.
-- <select>: focus+selectOption only. Expand-vs-toggle: check details.open first.
+- <select>: selectOption only — never a raw mouse click on the dropdown
+  list. probe() reads the select's current value via inputValue (1500ms
+  timeout), with --deep-selects cycles every OTHER option through
+  selectOption (each option label/value passes the DESTRUCTIVE guard first),
+  then restores the original value. The hand-written pickSelect helpers
+  focus+selectOption for the same reason. Expand-vs-toggle is detected by
+  COMPARING pre-click vs post-click state, not by peeking at details.open:
+  a details[open]-count increase, an equal-count vector change (exclusive
+  <details name="group"> swaps a sibling closed), or an aria-expanded=true
+  count increase (state-toggled accordion divs) all recurse into the
+  revealed children at depth+1, then re-click the same toggle to collapse.
 - Modal detection: `dialog[open], .modal-open` — covers current daisyUI
   (native <dialog>+showModal, no class change) and the legacy checkbox/anchor
   hack (`.modal.modal-open`). Do not narrow this back to a single selector.
@@ -1620,7 +1714,10 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   path (end of run, catch block, SIGINT). v2.8: the BACKUP is bracketed the
   same way (§7) — copying the live .db/-wal/-shm while the server runs can
   tear the snapshot itself, and restore would then faithfully "restore" a
-  corrupt DB. `--no-manage-dev-server` trades this automatic safety for a
+  corrupt DB. v2.9.3: restore is additionally gated on stopDevServer()
+  returning true — if the server survives force-kill, the restore is
+  refused with a manual instruction rather than run over a still-open
+  handle. `--no-manage-dev-server` trades this automatic safety for a
   printed manual-restart prompt when the script must not own the server's
   process (backup/restore are skipped with a warning in that mode — the
   script cannot make the externally-owned server release its handles).
@@ -1632,11 +1729,34 @@ Warm-up pass BEFORE the crawl (kills cold-SSR compile stalls):
   on aria-label having no visible text/title at all); word-boundary anchored
   (v2.6) so "Avoid" doesn't match `void`; ALSO applied per-option during
   --deep-selects enumeration (option labels/values previously bypassed it).
-- Destructive guard; void-not-delete; downloads fetched in-page (§1 A3);
-  native dialogs auto-dismissed and popups auto-closed by wirePageGuards()
-  (§4.3, wired in §7 main()).
-- coverage.md lists every failure with route+selector+text.
+- Destructive guard; void-not-delete; native dialogs auto-dismissed and
+  popups auto-closed by wirePageGuards() (§4.3, wired in §7 main()).
+  (Endpoint downloads are NOT auto-fetched by the sweep — see §1 A3.)
+- coverage.md's Failed/skipped section lists every click-failed and
+  skipped-destructive record as `route | selector | text | result`. Other
+  result kinds (route-failed, navigated, modal-opened, row-expanded,
+  details-expanded, select-enumerated, …) are NOT in that markdown list —
+  they live in coverage.json's records array, and writeCoverage's byResult
+  breakdown in both files covers every result kind.
+- Element-anchored dispatch (v2.9.1): the gliding cursor is COSMETIC. For
+  CLICK, the input event is anchored to the ELEMENT — post-glide the locator
+  is resolved into a handle at the last possible moment (locator.evaluateHandle
+  → handle.click; locator.click is the fallback when no handle resolves) —
+  never dispatched at glided-at coordinates. type()/fill() anchor the same
+  way through their FIRST action, locator.click() to focus the true element
+  (then keyboard.type / locator.fill) — they never mouse at coordinates
+  either. A re-render parking an impostor under the cursor cannot receive
+  the event; if the resolved node detached, handle.click() throws and the
+  locator.click() fallback re-resolves — and when the element is genuinely
+  gone, that throw is probe()'s retry signal, which drives resolveFresh's
+  stale-tag recovery. Do not "simplify" this back to page.mouse.click(x, y):
+  it silently re-opens the coordinate TOCTOU race.
 - Runbook: node --check → --selftest → 20-click headless smoke → headed
   recording (--normal) with `2>&1 | tee plan/replay/run.log`.
-- Failure: stop on first unrecoverable locator error naming route/selector;
-  rollback snapshot-first; exitCode 1; budget hit → partial report, exit 0.
+- Failure: per-route sweep errors are caught and recorded `route-failed`
+  and the queue drain CONTINUES (one bad route never stops the run). Errors
+  in login (after 3 attempts) or a hand-authored PARTS step are
+  UNRECOVERABLE — the FATAL path rolls back snapshot-first (gated on a
+  confirmed stop), restarts the dev server, writes the partial coverage
+  report and exits 1. A click-budget hit stops the drain early but still
+  runs the normal END (rollback + coverage) and exits 0.
